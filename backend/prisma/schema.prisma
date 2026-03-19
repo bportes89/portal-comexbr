@@ -1,0 +1,92 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  whatsappSessions WhatsappSession[]
+  campaigns        Campaign[]
+  contacts         Contact[]
+  groups           Group[]
+  automations      Automation[]
+}
+
+model WhatsappSession {
+  id        String   @id @default(uuid())
+  name      String
+  status    String   @default("DISCONNECTED") // DISCONNECTED, CONNECTED, QRCODE
+  qrcode    String?
+  phone     String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Contact {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String
+  tags      String[]
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  messages  Message[]
+}
+
+model Group {
+  id        String   @id @default(uuid())
+  name      String
+  whatsappId String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Campaign {
+  id        String   @id @default(uuid())
+  name      String
+  message   String
+  status    String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  scheduledAt DateTime?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  messages  Message[]
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  content   String
+  status    String   @default("PENDING") // PENDING, SENT, DELIVERED, READ, FAILED
+  sentAt    DateTime?
+  campaignId String?
+  campaign  Campaign? @relation(fields: [campaignId], references: [id])
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Automation {
+  id        String   @id @default(uuid())
+  keyword   String
+  response  String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
