@@ -64,6 +64,9 @@ export default function Campaigns() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [reportCampaign, setReportCampaign] = useState<Campaign | null>(null);
+  const [openCampaignMenuId, setOpenCampaignMenuId] = useState<string | null>(
+    null,
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [sessions, setSessions] = useState<WhatsappSession[]>([]);
@@ -87,6 +90,28 @@ export default function Campaigns() {
       fetchCampaigns();
     }
   }, [user]);
+
+  useEffect(() => {
+    if (!openCampaignMenuId) return;
+
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-campaign-menu]')) return;
+      setOpenCampaignMenuId(null);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenCampaignMenuId(null);
+    };
+
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [openCampaignMenuId]);
 
   const fetchSessions = async () => {
     if (!user) return;
@@ -237,6 +262,33 @@ export default function Campaigns() {
     setIsReportModalOpen(true);
   };
 
+  const copyToClipboard = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-1000px';
+      textarea.style.left = '-1000px';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+  };
+
+  const duplicateCampaign = (campaign: Campaign) => {
+    setFormData((prev) => ({
+      ...prev,
+      name: `${campaign.name} (cópia)`,
+      message: campaign.message,
+    }));
+    setSelectedContacts([]);
+    setIsModalOpen(true);
+  };
+
   const filters = ['all', 'sending', 'scheduled', 'completed', 'drafts'];
 
   return (
@@ -323,9 +375,60 @@ export default function Campaigns() {
                       <StatusIcon className="h-3 w-3" />
                       {t(`campaigns.status.${campaign.status}`)}
                     </div>
-                    <button className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-50">
-                      <MoreVertical className="h-4 w-4" />
-                    </button>
+                    <div className="relative" data-campaign-menu>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenCampaignMenuId((prev) =>
+                            prev === campaign.id ? null : campaign.id,
+                          )
+                        }
+                        className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-50"
+                        aria-haspopup="menu"
+                        aria-expanded={openCampaignMenuId === campaign.id}
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </button>
+
+                      {openCampaignMenuId === campaign.id && (
+                        <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-100 rounded-2xl shadow-xl overflow-hidden z-10">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenCampaignMenuId(null);
+                              openReport(campaign);
+                            }}
+                            className="w-full flex items-center gap-2 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <BarChart3 className="h-4 w-4 text-gray-500" />
+                            {t('campaigns.viewReport')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setOpenCampaignMenuId(null);
+                              await copyToClipboard(campaign.message);
+                              alert(t('common.success') || 'Sucesso');
+                            }}
+                            className="w-full flex items-center gap-2 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <MessageSquare className="h-4 w-4 text-gray-500" />
+                            Copiar mensagem
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenCampaignMenuId(null);
+                              duplicateCampaign(campaign);
+                            }}
+                            className="w-full flex items-center gap-2 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <Plus className="h-4 w-4 text-gray-500" />
+                            Duplicar campanha
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <h3 className="text-lg font-bold text-gray-900 mb-2 group-hover:text-green-600 transition-colors">{campaign.name}</h3>
