@@ -7,9 +7,9 @@ import {
   Put,
   Delete,
   Logger,
+  Query,
 } from '@nestjs/common';
 import { ContactsService } from './contacts.service';
-import { Prisma } from '@prisma/client';
 
 @Controller('contacts')
 export class ContactsController {
@@ -18,19 +18,25 @@ export class ContactsController {
   constructor(private readonly contactsService: ContactsService) {}
 
   @Post()
-  create(@Body() createContactDto: Prisma.ContactCreateInput) {
-    return this.contactsService.create(createContactDto);
+  async create(
+    @Body()
+    data: { name: string; phone: string; tags?: string[]; userId: string },
+  ) {
+    return this.contactsService.createForUser(data);
   }
 
   @Post('bulk')
-  createMany(@Body() createContactDtos: Prisma.ContactCreateManyInput[]) {
-    return this.contactsService.createMany(createContactDtos);
+  async createMany(
+    @Body()
+    data: Array<{ name: string; phone: string; tags?: string[]; userId: string }>,
+  ) {
+    return this.contactsService.createManyForUsers(data);
   }
 
   @Get()
-  async findAll() {
+  async findAll(@Query('userId') userId?: string) {
     try {
-      return await this.contactsService.findAll();
+      return await this.contactsService.findAll(userId);
     } catch (error: unknown) {
       this.logger.error(error);
       return [
@@ -58,7 +64,7 @@ export class ContactsController {
   @Put(':id')
   update(
     @Param('id') id: string,
-    @Body() updateContactDto: Prisma.ContactUpdateInput,
+    @Body() updateContactDto: { name?: string; phone?: string; tags?: string[] },
   ) {
     return this.contactsService.update(id, updateContactDto);
   }
