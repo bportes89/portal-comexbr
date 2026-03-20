@@ -37,6 +37,7 @@ interface Campaign {
     read: number;
     failed: number;
   };
+  messages?: Array<{ status: string }>;
   scheduledFor?: string;
 }
 
@@ -61,6 +62,8 @@ export default function Campaigns() {
 
   // New Campaign Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportCampaign, setReportCampaign] = useState<Campaign | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [sessions, setSessions] = useState<WhatsappSession[]>([]);
@@ -206,6 +209,34 @@ export default function Campaigns() {
     }
   };
 
+  const getCampaignStats = (campaign: Campaign) => {
+    if (campaign.stats) return campaign.stats;
+
+    const messages = campaign.messages ?? [];
+    let sent = 0;
+    let delivered = 0;
+    let read = 0;
+    let failed = 0;
+
+    for (const msg of messages) {
+      const status = String(msg.status || '').toUpperCase();
+      if (status === 'FAILED') failed += 1;
+      if (status === 'READ') read += 1;
+      if (status === 'DELIVERED') delivered += 1;
+      if (status === 'SENT') sent += 1;
+    }
+
+    sent += delivered + read;
+    delivered += read;
+
+    return { sent, delivered, read, failed };
+  };
+
+  const openReport = (campaign: Campaign) => {
+    setReportCampaign(campaign);
+    setIsReportModalOpen(true);
+  };
+
   const filters = ['all', 'sending', 'scheduled', 'completed', 'drafts'];
 
   return (
@@ -280,6 +311,7 @@ export default function Campaigns() {
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {campaigns.map((campaign) => {
               const StatusIcon = getStatusIcon(campaign.status);
+              const stats = getCampaignStats(campaign);
               const progress = campaign.stats 
                 ? Math.round(((campaign.stats.sent + campaign.stats.failed) / (campaign.stats.sent + campaign.stats.failed + (campaign.status === 'completed' ? 0 : 100))) * 100) 
                 : 0;
@@ -317,15 +349,15 @@ export default function Campaigns() {
                   <div className="grid grid-cols-3 gap-2 py-4 border-t border-gray-50">
                     <div className="text-center">
                       <p className="text-xs text-gray-400 uppercase font-semibold">{t('campaigns.stats.sent')}</p>
-                      <p className="text-sm font-bold text-gray-900">{campaign.stats?.sent || 0}</p>
+                      <p className="text-sm font-bold text-gray-900">{stats.sent || 0}</p>
                     </div>
                     <div className="text-center border-l border-gray-50">
                       <p className="text-xs text-gray-400 uppercase font-semibold">{t('campaigns.stats.read')}</p>
-                      <p className="text-sm font-bold text-gray-900">{campaign.stats?.read || 0}</p>
+                      <p className="text-sm font-bold text-gray-900">{stats.read || 0}</p>
                     </div>
                     <div className="text-center border-l border-gray-50">
                       <p className="text-xs text-gray-400 uppercase font-semibold">{t('campaigns.stats.failed')}</p>
-                      <p className="text-sm font-bold text-gray-900">{campaign.stats?.failed || 0}</p>
+                      <p className="text-sm font-bold text-gray-900">{stats.failed || 0}</p>
                     </div>
                   </div>
 
@@ -334,7 +366,11 @@ export default function Campaigns() {
                       <Calendar className="h-3 w-3" />
                       {new Date(campaign.createdAt).toLocaleDateString(language === 'pt' ? 'pt-BR' : 'en-US')}
                     </div>
-                    <button className="flex items-center gap-1 text-green-600 hover:text-green-700 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => openReport(campaign)}
+                      className="flex items-center gap-1 text-green-600 hover:text-green-700 font-medium"
+                    >
                       <BarChart3 className="h-3 w-3" />
                       {t('campaigns.viewReport')}
                     </button>
@@ -502,6 +538,80 @@ export default function Campaigns() {
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Report Modal */}
+      {isReportModalOpen && reportCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">{reportCampaign.name}</h2>
+                <p className="text-sm text-gray-500">
+                  {new Date(reportCampaign.createdAt).toLocaleString(
+                    language === 'pt' ? 'pt-BR' : 'en-US',
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsReportModalOpen(false);
+                  setReportCampaign(null);
+                }}
+                className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-gray-900">{t('campaigns.form.message') || 'Message'}</p>
+                <p className="text-sm text-gray-600 whitespace-pre-wrap">{reportCampaign.message}</p>
+              </div>
+
+              <div className="grid grid-cols-4 gap-3">
+                {(() => {
+                  const stats = getCampaignStats(reportCampaign);
+                  return (
+                    <>
+                      <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
+                        <p className="text-xs text-gray-400 uppercase font-semibold">{t('campaigns.stats.sent')}</p>
+                        <p className="text-lg font-bold text-gray-900 mt-1">{stats.sent}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
+                        <p className="text-xs text-gray-400 uppercase font-semibold">{t('campaigns.stats.delivered')}</p>
+                        <p className="text-lg font-bold text-gray-900 mt-1">{stats.delivered}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
+                        <p className="text-xs text-gray-400 uppercase font-semibold">{t('campaigns.stats.read')}</p>
+                        <p className="text-lg font-bold text-gray-900 mt-1">{stats.read}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-100">
+                        <p className="text-xs text-gray-400 uppercase font-semibold">{t('campaigns.stats.failed')}</p>
+                        <p className="text-lg font-bold text-gray-900 mt-1">{stats.failed}</p>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsReportModalOpen(false);
+                    setReportCampaign(null);
+                  }}
+                  className="px-5 py-2.5 text-gray-600 font-medium hover:bg-gray-100 rounded-xl transition-colors"
+                >
+                  {t('common.cancel')}
+                </button>
+              </div>
             </div>
           </div>
         </div>
