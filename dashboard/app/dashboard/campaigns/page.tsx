@@ -80,6 +80,7 @@ export default function Campaigns() {
   useEffect(() => {
     if (user) {
       fetchSessions();
+      fetchContacts();
     }
   }, [user]);
 
@@ -131,7 +132,9 @@ export default function Campaigns() {
 
   const fetchContacts = async () => {
     try {
-      const response = await api.get('/contacts');
+      const response = await api.get(
+        user ? `/contacts?userId=${encodeURIComponent(user.id)}` : '/contacts',
+      );
       setContacts(response.data);
     } catch (error) {
       console.error('Error fetching contacts:', error);

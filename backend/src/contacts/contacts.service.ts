@@ -70,12 +70,17 @@ export class ContactsService {
 
   async findAll(userId?: string) {
     try {
-      if (userId)
+      if (userId) {
         return await this.prisma.contact.findMany({ where: { userId } });
+      }
       return await this.prisma.contact.findMany();
     } catch {
-      if (userId) return ContactsService.demoContactsByUser.get(userId) ?? [];
-      return Array.from(ContactsService.demoContactsByUser.values()).flat();
+      if (userId) return this.ensureDemoContacts(userId);
+      const all = Array.from(
+        ContactsService.demoContactsByUser.values(),
+      ).flat();
+      if (all.length > 0) return all;
+      return this.ensureDemoContacts('mock-user-id');
     }
   }
 
@@ -181,6 +186,35 @@ export class ContactsService {
     const prev = ContactsService.demoContactsByUser.get(data.userId) ?? [];
     ContactsService.demoContactsByUser.set(data.userId, [contact, ...prev]);
     return contact;
+  }
+
+  private ensureDemoContacts(userId: string): ContactRecord[] {
+    const existing = ContactsService.demoContactsByUser.get(userId);
+    if (existing && existing.length > 0) return existing;
+
+    const demo: ContactRecord[] = [
+      {
+        id: randomUUID(),
+        name: 'João Silva',
+        phone: '+55 11 99999-9999',
+        tags: ['vip'],
+        userId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: randomUUID(),
+        name: 'Maria Souza',
+        phone: '+55 11 88888-8888',
+        tags: ['lead'],
+        userId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ];
+
+    ContactsService.demoContactsByUser.set(userId, demo);
+    return demo;
   }
 }
 
