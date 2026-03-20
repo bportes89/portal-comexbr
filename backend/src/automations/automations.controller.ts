@@ -7,6 +7,7 @@ import {
   Delete,
   Patch,
   Logger,
+  Query,
 } from '@nestjs/common';
 import { AutomationsService } from './automations.service';
 
@@ -17,14 +18,16 @@ export class AutomationsController {
   constructor(private readonly automationsService: AutomationsService) {}
 
   @Post()
-  create(@Body() data: { keyword: string; response: string; userId: string }) {
-    return this.automationsService.create(data);
+  async create(
+    @Body() data: { keyword: string; response: string; userId: string },
+  ) {
+    return await this.automationsService.createForUser(data);
   }
 
   @Get()
-  async findAll() {
+  async findAll(@Query('userId') userId?: string) {
     try {
-      return await this.automationsService.findAll();
+      return await this.automationsService.findAll(userId);
     } catch (error: unknown) {
       this.logger.error(error);
       return [

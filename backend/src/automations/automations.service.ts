@@ -1,16 +1,31 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class AutomationsService {
   private readonly logger = new Logger(AutomationsService.name);
+  private static demoAutomationsByUser = new Map<string, AutomationRecord[]>();
 
   constructor(
     private readonly prisma: PrismaService,
     @Inject(forwardRef(() => WhatsappService))
     private readonly whatsappService: WhatsappService,
   ) {}
+
+  private async ensureUser(userId: string) {
+    await this.prisma.user.upsert({
+      where: { id: userId },
+      update: {},
+      create: {
+        id: userId,
+        email: `${userId}@demo.portal-comexbr.local`,
+        password: 'demo',
+        name: 'Demo User',
+      },
+    });
+  }
 
   async processIncomingMessage(
     phone: string,
@@ -21,57 +36,144 @@ export class AutomationsService {
       `Processing message from ${phone}: ${text} on instance ${instanceName}`,
     );
 
-    // 1. Find user by instance name
-    const session = await this.prisma.whatsappSession.findFirst({
-      where: { name: instanceName },
-      select: { userId: true },
-    });
+    try {
+      const session = await this.prisma.whatsappSession.findFirst({
+        where: { name: instanceName },
+        select: { userId: true },
+      });
 
-    if (!session) {
-      this.logger.warn(`No session found for instance: ${instanceName}`);
-      return;
-    }
-
-    // 2. Find automations for this user only
-    const automations = await this.prisma.automation.findMany({
-      where: { userId: session.userId },
-    });
-
-    for (const automation of automations) {
-      if (text.toLowerCase().includes(automation.keyword.toLowerCase())) {
-        this.logger.log(
-          `Keyword matched: ${automation.keyword}. Sending response.`,
-        );
-
-        await this.whatsappService.queueMessage(
-          instanceName,
-          phone,
-          automation.response,
-          2000, // 2 seconds delay for natural feel
-        );
-
-        // Stop after first match? Depends on requirements. Assuming yes for now.
-        break;
+      if (!session) {
+        this.logger.warn(`No session found for instance: ${instanceName}`);
+        return;
       }
+
+      const automations = await this.prisma.automation.findMany({
+        where: { userId: session.userId },
+      });
+
+      for (const automation of automations) {
+        if (text.toLowerCase().includes(automation.keyword.toLowerCase())) {
+          this.logger.log(
+            `Keyword matched: ${automation.keyword}. Sending response.`,
+          );
+
+          await this.whatsappService.queueMessage(
+            instanceName,
+            phone,
+            automation.response,
+            2000,
+          );
+
+          break;
+        }
+      }
+    } catch (error: unknown) {
+      this.logger.error(error);
     }
   }
 
-  async create(data: { keyword: string; response: string; userId: string }) {
-    return this.prisma.automation.create({ data });
+  async createForUser(data: {
+    keyword: string;
+    response: string;
+    userId: string;
+  }) {
+    try {
+      await this.ensureUser(data.userId);
+      return await this.prisma.automation.create({ data });
+    } catch {
+      return this.createInMemory(data);
+    }
   }
 
   async update(id: string, data: { keyword?: string; response?: string }) {
-    return this.prisma.automation.update({
-      where: { id },
-      data,
-    });
+    try {
+      return await this.prisma.automation.update({
+        where: { id },
+        data,
+      });
+    } catch {
+      for (const [
+        userId,
+        automations,
+      ] of AutomationsService.demoAutomationsByUser.entries()) {
+        const idx = automations.findIndex((a) => a.id === id);
+        if (idx === -1) continue;
+
+        const updated: AutomationRecord = {
+          ...automations[idx],
+          keyword: data.keyword ?? automations[idx].keyword,
+          response: data.response ?? automations[idx].response,
+          updatedAt: new Date(),
+        };
+        const next = [...automations];
+        next[idx] = updated;
+        AutomationsService.demoAutomationsByUser.set(userId, next);
+        return updated;
+      }
+      throw new Error('Automation not found');
+    }
   }
 
-  async findAll() {
-    return this.prisma.automation.findMany();
+  async findAll(userId?: string) {
+    try {
+      if (userId)
+        return await this.prisma.automation.findMany({ where: { userId } });
+      return await this.prisma.automation.findMany();
+    } catch {
+      if (userId)
+        return AutomationsService.demoAutomationsByUser.get(userId) ?? [];
+      return Array.from(
+        AutomationsService.demoAutomationsByUser.values(),
+      ).flat();
+    }
   }
 
   async remove(id: string) {
-    return this.prisma.automation.delete({ where: { id } });
+    try {
+      return await this.prisma.automation.delete({ where: { id } });
+    } catch {
+      for (const [
+        userId,
+        automations,
+      ] of AutomationsService.demoAutomationsByUser.entries()) {
+        const idx = automations.findIndex((a) => a.id === id);
+        if (idx === -1) continue;
+        const removed = automations[idx];
+        AutomationsService.demoAutomationsByUser.set(
+          userId,
+          automations.filter((a) => a.id !== id),
+        );
+        return removed;
+      }
+      throw new Error('Automation not found');
+    }
+  }
+
+  private createInMemory(data: {
+    keyword: string;
+    response: string;
+    userId: string;
+  }): AutomationRecord {
+    const rule: AutomationRecord = {
+      id: randomUUID(),
+      keyword: data.keyword,
+      response: data.response,
+      userId: data.userId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const prev =
+      AutomationsService.demoAutomationsByUser.get(data.userId) ?? [];
+    AutomationsService.demoAutomationsByUser.set(data.userId, [rule, ...prev]);
+    return rule;
   }
 }
+
+type AutomationRecord = {
+  id: string;
+  keyword: string;
+  response: string;
+  userId: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
