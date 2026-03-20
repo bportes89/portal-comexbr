@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Param, Logger } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Logger,
+  Query,
+} from '@nestjs/common';
 import { CampaignsService } from './campaigns.service';
 
 @Controller('campaigns')
@@ -8,7 +16,7 @@ export class CampaignsController {
   constructor(private readonly campaignsService: CampaignsService) {}
 
   @Post()
-  create(
+  async create(
     @Body()
     data: {
       name: string;
@@ -19,13 +27,18 @@ export class CampaignsController {
       delay?: number;
     },
   ) {
-    return this.campaignsService.createCampaign(data);
+    try {
+      return await this.campaignsService.createCampaign(data);
+    } catch (error: unknown) {
+      this.logger.error(error);
+      return this.campaignsService.createCampaignInMemory(data);
+    }
   }
 
   @Get()
-  async findAll() {
+  async findAll(@Query('userId') userId?: string) {
     try {
-      return await this.campaignsService.findAll();
+      return await this.campaignsService.findAll(userId);
     } catch (error: unknown) {
       this.logger.error(error);
       const now = new Date().toISOString();
@@ -41,7 +54,7 @@ export class CampaignsController {
         {
           id: '2',
           name: 'Black Friday Promo',
-          message: "Não perca nossas ofertas!",
+          message: 'Não perca nossas ofertas!',
           status: 'scheduled',
           createdAt: now,
           scheduledFor: new Date(Date.now() + 86400000).toISOString(),

@@ -81,6 +81,7 @@ export default function Campaigns() {
     if (user) {
       fetchSessions();
       fetchContacts();
+      fetchCampaigns();
     }
   }, [user]);
 
@@ -99,7 +100,9 @@ export default function Campaigns() {
 
   const fetchCampaigns = async () => {
     try {
-      const response = await api.get('/campaigns');
+      const response = await api.get(
+        user ? `/campaigns?userId=${encodeURIComponent(user.id)}` : '/campaigns',
+      );
       setCampaigns(response.data);
     } catch (error) {
       console.error('Error fetching campaigns:', error);
