@@ -17,9 +17,32 @@ export class AutomationsController {
 
   constructor(private readonly automationsService: AutomationsService) {}
 
+  @Post('templates/apply')
+  async applyTemplate(
+    @Body()
+    data: {
+      templateKey: string;
+      userId: string;
+      projectId?: string;
+    },
+  ) {
+    try {
+      return await this.automationsService.applyTemplate(data);
+    } catch (error: unknown) {
+      this.logger.error(error);
+      return { created: false };
+    }
+  }
+
   @Post()
   async create(
-    @Body() data: { keyword: string; response: string; userId: string },
+    @Body()
+    data: {
+      keyword: string;
+      response: string;
+      userId: string;
+      projectId?: string;
+    },
   ) {
     return await this.automationsService.createForUser(data);
   }

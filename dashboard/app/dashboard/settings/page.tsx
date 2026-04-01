@@ -21,6 +21,18 @@ import { useAuth } from '../../../context/AuthContext';
 import api from '../../../lib/api';
 import { motion } from 'framer-motion';
 
+interface WhatsappSession {
+  id: string;
+  name: string;
+  status: string;
+  projectId?: string | null;
+}
+
+interface Project {
+  id: string;
+  name: string;
+}
+
 const container = {
   hidden: { opacity: 0 },
   show: {
@@ -42,21 +54,37 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState('profile');
   const [isConnected, setIsConnected] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [isGeneratingQr, setIsGeneratingQr] = useState(false);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [instanceName, setInstanceName] = useState('');
+  const [sessions, setSessions] = useState<WhatsappSession[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
 
   useEffect(() => {
     if (!user) return;
 
     const run = async () => {
       try {
-        const response = await api.get(`/whatsapp/sessions?userId=${user.id}`);
-        if (response.data && response.data.length > 0) {
-          const session = response.data[0];
+        const [sessionsResp, projectsResp] = await Promise.all([
+          api.get(`/whatsapp/sessions?userId=${user.id}`),
+          api.get(`/projects?userId=${encodeURIComponent(user.id)}`),
+        ]);
+
+        const nextSessions: WhatsappSession[] = sessionsResp.data ?? [];
+        const nextProjects: Project[] = projectsResp.data ?? [];
+
+        setSessions(nextSessions);
+        setProjects(nextProjects);
+
+        if (nextSessions.length > 0) {
+          const session = nextSessions[0];
           setInstanceName(session.name);
-          if (session.status === 'CONNECTED') {
-            setIsConnected(true);
-          }
+          setSelectedProjectId(session.projectId ?? '');
+          setIsConnected(session.status === 'CONNECTED');
+        } else {
+          setIsConnected(false);
+          setSelectedProjectId('');
         }
       } catch (error) {
         console.error('Error checking WhatsApp status:', error);
@@ -66,10 +94,29 @@ export default function Settings() {
     run();
   }, [user]);
 
+  const refreshSessions = async () => {
+    if (!user) return;
+    try {
+      const response = await api.get(`/whatsapp/sessions?userId=${user.id}`);
+      const nextSessions: WhatsappSession[] = response.data ?? [];
+      setSessions(nextSessions);
+
+      const active = nextSessions.find((s) => s.name === instanceName) ?? nextSessions[0];
+      if (active) {
+        setInstanceName(active.name);
+        setSelectedProjectId(active.projectId ?? '');
+        setIsConnected(active.status === 'CONNECTED');
+      }
+    } catch (error) {
+      console.error('Error fetching sessions:', error);
+    }
+  };
+
   const handleConnect = async () => {
     if (!user) return;
     const userId = user.id;
     setIsScanning(true);
+    setIsGeneratingQr(true);
     setQrCode(null);
     
     try {
@@ -79,29 +126,62 @@ export default function Settings() {
 
       const response = await api.post('/whatsapp/connect', {
         instanceName: name,
-        userId
+        userId,
+        projectId: selectedProjectId || undefined,
       });
 
       if (response.data && response.data.qrcode) {
         setQrCode(response.data.qrcode.base64 || response.data.qrcode);
+        setIsGeneratingQr(false);
       } else if (response.data && response.data.base64) {
         setQrCode(response.data.base64);
+        setIsGeneratingQr(false);
       } else if (response.data && response.data.instance && response.data.instance.status === 'open') {
          setIsConnected(true);
          setIsScanning(false);
+         setIsGeneratingQr(false);
       }
+      refreshSessions();
 
     } catch (error) {
       console.error('Error connecting to WhatsApp:', error);
       alert('Failed to generate QR Code');
       setIsScanning(false);
+      setIsGeneratingQr(false);
     }
   };
 
   const handleDisconnect = async () => {
-    // TODO: Implement disconnect endpoint in backend
-    setIsConnected(false);
-    setQrCode(null);
+    if (!user) return;
+    try {
+      await api.post('/whatsapp/disconnect', {
+        instanceName,
+        userId: user.id,
+      });
+    } catch (error) {
+      console.error('Error disconnecting WhatsApp:', error);
+    } finally {
+      setIsConnected(false);
+      setIsScanning(false);
+      setIsGeneratingQr(false);
+      setQrCode(null);
+      refreshSessions();
+    }
+  };
+
+  const handleAssignProject = async () => {
+    if (!user || !instanceName) return;
+    try {
+      await api.post('/whatsapp/sessions/assign', {
+        userId: user.id,
+        instanceName,
+        projectId: selectedProjectId ? selectedProjectId : null,
+      });
+      refreshSessions();
+    } catch (error) {
+      console.error('Error assigning project to session:', error);
+      alert(t('common.error'));
+    }
   };
 
   return (
@@ -215,6 +295,71 @@ export default function Settings() {
                     <p className="text-slate-400 text-sm mt-1">{t('settings.whatsapp.subtitle')}</p>
                   </div>
 
+                  <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-slate-300">Sessão</label>
+                      <select
+                        value={instanceName}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setInstanceName(next);
+                          const selected = sessions.find((s) => s.name === next);
+                          if (selected) {
+                            setIsConnected(selected.status === 'CONNECTED');
+                            setSelectedProjectId(selected.projectId ?? '');
+                          }
+                        }}
+                        className="w-full px-4 py-2 bg-slate-800/50 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-green-500/50"
+                      >
+                        {instanceName && !sessions.some((s) => s.name === instanceName) && (
+                          <option value={instanceName}>{instanceName}</option>
+                        )}
+                        {sessions.length === 0 && <option value="">{t('common.loading')}</option>}
+                        {sessions.map((s) => (
+                          <option key={s.id} value={s.name}>
+                            {s.name} ({s.status})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-slate-300">Instance Name</label>
+                      <input
+                        type="text"
+                        value={instanceName}
+                        onChange={(e) => setInstanceName(e.target.value)}
+                        placeholder={`user_${user?.id?.substring(0, 8) ?? ''}`}
+                        className="w-full px-4 py-2 bg-slate-800/50 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-green-500/50 placeholder:text-slate-600"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-slate-300">{t('sidebar.projects')}</label>
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedProjectId}
+                          onChange={(e) => setSelectedProjectId(e.target.value)}
+                          className="flex-1 px-4 py-2 bg-slate-800/50 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-green-500/50"
+                        >
+                          <option value="">Sem projeto</option>
+                          {projects.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={handleAssignProject}
+                          className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-sm font-medium text-white hover:bg-white/10 transition-colors hover:border-white/20"
+                        >
+                          {t('common.save')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
 
                   <div className={cn(
                     "p-6 rounded-xl border flex flex-col md:flex-row items-center gap-6 transition-all duration-300",
@@ -249,10 +394,10 @@ export default function Settings() {
                       ) : (
                         <button 
                           onClick={handleConnect}
-                          disabled={isScanning}
+                          disabled={isGeneratingQr}
                           className="px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg text-sm font-medium hover:from-green-500 hover:to-emerald-500 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg shadow-green-600/20 hover:shadow-green-600/40 hover:-translate-y-0.5"
                         >
-                          {isScanning ? (
+                          {isGeneratingQr ? (
                             <>
                               <RefreshCw className="h-4 w-4 animate-spin" />
                               {t('settings.whatsapp.generatingQR')}

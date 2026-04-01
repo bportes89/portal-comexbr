@@ -20,7 +20,12 @@ export class ContactsController {
   @Post()
   async create(
     @Body()
-    data: { name: string; phone: string; tags?: string[]; userId: string },
+    data: {
+      name: string;
+      phone: string;
+      tags?: string[];
+      userId: string;
+    },
   ) {
     return this.contactsService.createForUser(data);
   }
@@ -28,15 +33,30 @@ export class ContactsController {
   @Post('bulk')
   async createMany(
     @Body()
-    data: Array<{ name: string; phone: string; tags?: string[]; userId: string }>,
+    data: Array<{
+      name: string;
+      phone: string;
+      tags?: string[];
+      userId: string;
+    }>,
   ) {
     return this.contactsService.createManyForUsers(data);
   }
 
   @Get()
-  async findAll(@Query('userId') userId?: string) {
+  async findAll(
+    @Query('userId') userId?: string,
+    @Query('projectId') projectId?: string,
+    @Query('minScore') minScore?: string,
+    @Query('tag') tag?: string,
+  ) {
     try {
-      return await this.contactsService.findAll(userId);
+      return await this.contactsService.findAll({
+        userId,
+        projectId,
+        minScore: minScore ? Number(minScore) : undefined,
+        tag,
+      });
     } catch (error: unknown) {
       this.logger.error(error);
       return [
@@ -64,7 +84,8 @@ export class ContactsController {
   @Put(':id')
   update(
     @Param('id') id: string,
-    @Body() updateContactDto: { name?: string; phone?: string; tags?: string[] },
+    @Body()
+    updateContactDto: { name?: string; phone?: string; tags?: string[] },
   ) {
     return this.contactsService.update(id, updateContactDto);
   }

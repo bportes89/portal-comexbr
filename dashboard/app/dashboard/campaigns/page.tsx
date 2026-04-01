@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { 
   Plus, 
   Search, 
-  Filter, 
   MessageSquare, 
   Calendar, 
   Clock, 
@@ -16,8 +15,8 @@ import {
   BarChart3,
   X,
   Loader2,
-  Users,
-  Send
+  Send,
+  Trash2
 } from 'lucide-react';
 import { Header } from '../../../components/Header';
 import api from '../../../lib/api';
@@ -29,8 +28,9 @@ interface Campaign {
   id: string;
   name: string;
   message: string;
-  status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'failed' | 'paused';
+  status: string;
   createdAt: string;
+  scheduledAt?: string | null;
   stats?: {
     sent: number;
     delivered: number;
@@ -54,6 +54,13 @@ interface WhatsappSession {
   status: string;
 }
 
+type MessageTemplate = {
+  id: string;
+  name: string;
+  content: string;
+  createdAt: string;
+};
+
 export default function Campaigns() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -70,12 +77,18 @@ export default function Campaigns() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [sessions, setSessions] = useState<WhatsappSession[]>([]);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [newTemplateName, setNewTemplateName] = useState('');
   const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
   const [formData, setFormData] = useState({
     name: '',
     message: '',
     delay: 5000,
-    instanceName: ''
+    instanceName: '',
+    scheduledAt: '',
+    sendWindowStart: '08:00',
+    sendWindowEnd: '22:00',
   });
 
   useEffect(() => {
@@ -88,8 +101,13 @@ export default function Campaigns() {
       fetchSessions();
       fetchContacts();
       fetchCampaigns();
+      fetchTemplates();
     }
   }, [user]);
+
+  const templatesById = useMemo(() => {
+    return new Map((templates ?? []).map((tpl) => [tpl.id, tpl]));
+  }, [templates]);
 
   useEffect(() => {
     if (!openCampaignMenuId) return;
@@ -179,6 +197,26 @@ export default function Campaigns() {
     }
   };
 
+  const fetchTemplates = async () => {
+    if (!user) return;
+    try {
+      const response = await api.get(`/templates?userId=${encodeURIComponent(user.id)}`);
+      setTemplates(response.data ?? []);
+    } catch (error) {
+      console.error('Error fetching templates:', error);
+      setTemplates([]);
+    }
+  };
+
+  const toMinutes = (hhmm: string) => {
+    const parts = hhmm.split(':');
+    const h = Number(parts[0]);
+    const m = Number(parts[1]);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return undefined;
+    if (h < 0 || h > 23 || m < 0 || m > 59) return undefined;
+    return h * 60 + m;
+  };
+
   const handleCreateCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -189,13 +227,23 @@ export default function Campaigns() {
 
     setIsSubmitting(true);
     try {
+      const sendWindowStartMin = toMinutes(formData.sendWindowStart);
+      const sendWindowEndMin = toMinutes(formData.sendWindowEnd);
       await api.post('/campaigns', {
-        ...formData,
+        name: formData.name,
+        message: formData.message,
+        delay: formData.delay,
+        instanceName: formData.instanceName,
+        scheduledAt: formData.scheduledAt ? new Date(formData.scheduledAt).toISOString() : undefined,
+        sendWindowStartMin,
+        sendWindowEndMin,
         userId: user.id,
         contactIds: selectedContacts,
       });
       setIsModalOpen(false);
-      setFormData({ name: '', message: '', delay: 5000, instanceName: 'Evolution1' });
+      setFormData({ name: '', message: '', delay: 5000, instanceName: 'Evolution1', scheduledAt: '', sendWindowStart: '08:00', sendWindowEnd: '22:00' });
+      setSelectedTemplateId('');
+      setNewTemplateName('');
       setSelectedContacts([]);
       fetchCampaigns(); // Refresh list
     } catch (error) {
@@ -234,6 +282,49 @@ export default function Campaigns() {
     }
   };
 
+  const normalizeCampaignStatus = (
+    campaign: Campaign,
+  ): 'draft' | 'scheduled' | 'sending' | 'completed' | 'failed' | 'paused' => {
+    const raw = String(campaign.status || '').trim();
+    const lower = raw.toLowerCase();
+    if (
+      lower === 'draft' ||
+      lower === 'scheduled' ||
+      lower === 'sending' ||
+      lower === 'completed' ||
+      lower === 'failed' ||
+      lower === 'paused'
+    ) {
+      return lower;
+    }
+
+    const scheduleRaw = campaign.scheduledAt ?? campaign.scheduledFor;
+    const scheduleDate = scheduleRaw ? new Date(scheduleRaw) : null;
+    const hasFutureSchedule =
+      scheduleDate &&
+      Number.isFinite(scheduleDate.getTime()) &&
+      scheduleDate.getTime() > Date.now();
+
+    switch (raw.toUpperCase()) {
+      case 'PENDING':
+        return hasFutureSchedule ? 'scheduled' : 'sending';
+      case 'PROCESSING':
+        return 'sending';
+      case 'SCHEDULED':
+        return 'scheduled';
+      case 'COMPLETED':
+        return 'completed';
+      case 'FAILED':
+        return 'failed';
+      case 'PAUSED':
+        return 'paused';
+      case 'DRAFT':
+        return 'draft';
+      default:
+        return 'sending';
+    }
+  };
+
   const getCampaignStats = (campaign: Campaign) => {
     if (campaign.stats) return campaign.stats;
 
@@ -260,6 +351,19 @@ export default function Campaigns() {
   const openReport = (campaign: Campaign) => {
     setReportCampaign(campaign);
     setIsReportModalOpen(true);
+  };
+
+  const deleteCampaign = async (campaignId: string) => {
+    const confirmed = window.confirm(t('common.confirmDelete'));
+    if (!confirmed) return;
+
+    try {
+      await api.delete(`/campaigns/${campaignId}`);
+      setCampaigns((prev) => prev.filter((c) => c.id !== campaignId));
+    } catch (error) {
+      console.error('Error deleting campaign:', error);
+      alert(t('common.error'));
+    }
   };
 
   const copyToClipboard = async (value: string) => {
@@ -362,18 +466,19 @@ export default function Campaigns() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {campaigns.map((campaign) => {
-              const StatusIcon = getStatusIcon(campaign.status);
+              const normalizedStatus = normalizeCampaignStatus(campaign);
+              const StatusIcon = getStatusIcon(normalizedStatus);
               const stats = getCampaignStats(campaign);
               const progress = campaign.stats 
-                ? Math.round(((campaign.stats.sent + campaign.stats.failed) / (campaign.stats.sent + campaign.stats.failed + (campaign.status === 'completed' ? 0 : 100))) * 100) 
+                ? Math.round(((campaign.stats.sent + campaign.stats.failed) / (campaign.stats.sent + campaign.stats.failed + (normalizedStatus === 'completed' ? 0 : 100))) * 100) 
                 : 0;
 
               return (
                 <div key={campaign.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow group">
                   <div className="flex items-start justify-between mb-4">
-                    <div className={cn("px-3 py-1 rounded-full text-xs font-medium border flex items-center gap-1.5", getStatusColor(campaign.status))}>
+                    <div className={cn("px-3 py-1 rounded-full text-xs font-medium border flex items-center gap-1.5", getStatusColor(normalizedStatus))}>
                       <StatusIcon className="h-3 w-3" />
-                      {t(`campaigns.status.${campaign.status}`)}
+                      {t(`campaigns.status.${normalizedStatus}`)}
                     </div>
                     <div className="relative" data-campaign-menu>
                       <button
@@ -426,6 +531,17 @@ export default function Campaigns() {
                             <Plus className="h-4 w-4 text-gray-500" />
                             Duplicar campanha
                           </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setOpenCampaignMenuId(null);
+                              await deleteCampaign(campaign.id);
+                            }}
+                            className="w-full flex items-center gap-2 px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            {t('common.delete')}
+                          </button>
                         </div>
                       )}
                     </div>
@@ -438,12 +554,12 @@ export default function Campaigns() {
                   <div className="mb-4">
                     <div className="flex justify-between text-xs mb-1.5">
                       <span className="text-gray-500 font-medium">{t('campaigns.progress')}</span>
-                      <span className="text-gray-900 font-bold">{campaign.status === 'completed' ? '100%' : `${progress}%`}</span>
+                      <span className="text-gray-900 font-bold">{normalizedStatus === 'completed' ? '100%' : `${progress}%`}</span>
                     </div>
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div 
                         className="h-full bg-green-500 rounded-full transition-all duration-500"
-                        style={{ width: campaign.status === 'completed' ? '100%' : `${progress}%` }}
+                        style={{ width: normalizedStatus === 'completed' ? '100%' : `${progress}%` }}
                       />
                     </div>
                   </div>
@@ -465,9 +581,24 @@ export default function Campaigns() {
                   </div>
 
                   <div className="flex items-center justify-between pt-4 border-t border-gray-50 text-xs text-gray-400">
-                    <div className="flex items-center gap-1">
-                      <Calendar className="h-3 w-3" />
-                      {new Date(campaign.createdAt).toLocaleDateString(language === 'pt' ? 'pt-BR' : 'en-US')}
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        {new Date(campaign.createdAt).toLocaleDateString(language === 'pt' ? 'pt-BR' : 'en-US')}
+                      </div>
+                      {(() => {
+                        const raw = campaign.scheduledAt ?? campaign.scheduledFor;
+                        if (!raw) return null;
+                        const when = new Date(raw);
+                        if (!Number.isFinite(when.getTime())) return null;
+                        if (when.getTime() <= Date.now()) return null;
+                        return (
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {when.toLocaleString(language === 'pt' ? 'pt-BR' : 'en-US')}
+                          </div>
+                        );
+                      })()}
                     </div>
                     <button
                       type="button"
@@ -519,6 +650,57 @@ export default function Campaigns() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     {t('campaigns.form.message') || 'Message'}
                   </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
+                    <select
+                      value={selectedTemplateId}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setSelectedTemplateId(id);
+                        const tpl = templatesById.get(id);
+                        if (tpl) setFormData({ ...formData, message: tpl.content });
+                      }}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all bg-white"
+                    >
+                      <option value="">Sem template</option>
+                      {templates.map((tpl) => (
+                        <option key={tpl.id} value={tpl.id}>
+                          {tpl.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newTemplateName}
+                        onChange={(e) => setNewTemplateName(e.target.value)}
+                        className="flex-1 px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all"
+                        placeholder="Nome do template"
+                      />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!user) return;
+                          const name = newTemplateName.trim();
+                          const content = formData.message.trim();
+                          if (!name || !content) {
+                            alert(t('common.error'));
+                            return;
+                          }
+                          try {
+                            await api.post('/templates', { userId: user.id, name, content });
+                            setNewTemplateName('');
+                            await fetchTemplates();
+                          } catch (error) {
+                            console.error('Error creating template:', error);
+                            alert(t('common.error'));
+                          }
+                        }}
+                        className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Salvar
+                      </button>
+                    </div>
+                  </div>
                   <textarea
                     required
                     value={formData.message}
@@ -526,6 +708,9 @@ export default function Campaigns() {
                     className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all h-32 resize-none"
                     placeholder="Type your message here..."
                   />
+                  <div className="mt-2 text-xs text-gray-500">
+                    Variáveis: {'{{name}}'}, {'{{phone}}'}, {'{{score}}'}, {'{{tags}}'}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -560,6 +745,42 @@ export default function Campaigns() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Agendar para
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={formData.scheduledAt}
+                      onChange={(e) => setFormData({ ...formData, scheduledAt: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Janela início
+                    </label>
+                    <input
+                      type="time"
+                      value={formData.sendWindowStart}
+                      onChange={(e) => setFormData({ ...formData, sendWindowStart: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Janela fim
+                    </label>
+                    <input
+                      type="time"
+                      value={formData.sendWindowEnd}
+                      onChange={(e) => setFormData({ ...formData, sendWindowEnd: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all"
+                    />
                   </div>
                 </div>
 

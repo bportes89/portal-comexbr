@@ -8,13 +8,15 @@ import {
   ArrowRight, 
   MoreHorizontal,
   Zap,
-  Activity,
-  Calendar
+  Activity
 } from 'lucide-react';
 import { Header } from '../../components/Header';
 import { cn } from '../../lib/utils';
 import { motion } from 'framer-motion';
 import { useLanguage } from '../../context/LanguageContext';
+import { useAuth } from '../../context/AuthContext';
+import { useEffect, useState } from 'react';
+import api from '../../lib/api';
 
 const container = {
   hidden: { opacity: 0 },
@@ -33,6 +35,53 @@ const item = {
 
 export default function Dashboard() {
   const { t } = useLanguage();
+  const { user } = useAuth();
+  const [overview, setOverview] = useState<{
+    messagesTotal: number;
+    activeCampaigns: number;
+    connectedNumbers: number;
+  } | null>(null);
+  const [systemStatus, setSystemStatus] = useState<{
+    whatsappApi: { configured: boolean };
+    messageQueue: { ok: boolean };
+    database: { ok: boolean };
+  } | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    const run = async () => {
+      try {
+        const resp = await api.get(
+          `/analytics/overview?userId=${encodeURIComponent(user.id)}`,
+        );
+        const totals = resp.data?.totals;
+        const messagesTotal = Number(totals?.messages?.total ?? 0);
+        const activeCampaigns = Number(totals?.activeCampaigns ?? 0);
+        const connectedNumbers = Number(totals?.connectedNumbers ?? 0);
+        setOverview({
+          messagesTotal,
+          activeCampaigns,
+          connectedNumbers,
+        });
+      } catch (error) {
+        console.error('Error fetching analytics overview:', error);
+      }
+    };
+    run();
+  }, [user]);
+
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const resp = await api.get('/system/status');
+        setSystemStatus(resp.data);
+      } catch (error) {
+        console.error('Error fetching system status:', error);
+        setSystemStatus(null);
+      }
+    };
+    run();
+  }, []);
 
   return (
     <>
@@ -83,7 +132,9 @@ export default function Dashboard() {
                 </span>
               </div>
               <h3 className="text-emerald-100/70 text-sm font-medium uppercase tracking-widest">{t('dashboard.stats.messages')}</h3>
-              <p className="text-5xl font-bold text-white mt-2 tracking-tight drop-shadow-lg">12,345</p>
+              <p className="text-5xl font-bold text-white mt-2 tracking-tight drop-shadow-lg">
+                {(overview?.messagesTotal ?? 12345).toLocaleString()}
+              </p>
             </div>
           </motion.div>
 
@@ -105,7 +156,9 @@ export default function Dashboard() {
             <div className="relative z-10">
               <h3 className="text-slate-500 text-sm font-medium uppercase tracking-widest">{t('dashboard.stats.activeCampaigns')}</h3>
               <div className="flex items-baseline gap-2 mt-2">
-                <p className="text-5xl font-bold text-white tracking-tight">3</p>
+                <p className="text-5xl font-bold text-white tracking-tight">
+                  {overview?.activeCampaigns ?? 3}
+                </p>
                 <span className="text-sm text-slate-400 font-medium">{t('dashboard.runningNow')}</span>
               </div>
               <div className="w-full bg-slate-800/50 h-1.5 rounded-full mt-6 overflow-hidden border border-white/5">
@@ -136,7 +189,9 @@ export default function Dashboard() {
             <div className="relative z-10">
               <h3 className="text-slate-500 text-sm font-medium uppercase tracking-widest">{t('dashboard.connectedNumbers')}</h3>
               <div className="flex items-baseline gap-2 mt-2">
-                <p className="text-5xl font-bold text-white tracking-tight">1</p>
+                <p className="text-5xl font-bold text-white tracking-tight">
+                  {overview?.connectedNumbers ?? 1}
+                </p>
                 <span className="text-sm text-slate-400 font-medium">{t('dashboard.device')}</span>
               </div>
               <div className="mt-6 flex -space-x-3 overflow-hidden">
@@ -257,19 +312,44 @@ export default function Dashboard() {
               </h3>
               <div className="space-y-5">
                 {[
-                  { label: t('dashboard.systemStatus.whatsappApi'), status: t('dashboard.systemStatus.operational') },
-                  { label: t('dashboard.systemStatus.messageQueue'), status: t('dashboard.systemStatus.operational') },
-                  { label: t('dashboard.systemStatus.database'), status: t('dashboard.systemStatus.operational') }
+                  {
+                    label: t('dashboard.systemStatus.whatsappApi'),
+                    ok: systemStatus ? systemStatus.whatsappApi.configured : true,
+                  },
+                  {
+                    label: t('dashboard.systemStatus.messageQueue'),
+                    ok: systemStatus ? systemStatus.messageQueue.ok : true,
+                  },
+                  {
+                    label: t('dashboard.systemStatus.database'),
+                    ok: systemStatus ? systemStatus.database.ok : true,
+                  },
                 ].map((item, i) => (
                   <div key={i} className="flex items-center justify-between group">
                     <div className="flex items-center gap-3">
-                      <div className="h-8 w-8 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 group-hover:text-green-400 group-hover:bg-green-500/10 transition-colors border border-white/5">
+                      <div
+                        className={cn(
+                          'h-8 w-8 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 transition-colors border border-white/5',
+                          item.ok
+                            ? 'group-hover:text-green-400 group-hover:bg-green-500/10'
+                            : 'group-hover:text-red-400 group-hover:bg-red-500/10',
+                        )}
+                      >
                         <Activity className="h-4 w-4" />
                       </div>
                       <span className="text-sm text-slate-300 font-medium">{item.label}</span>
                     </div>
-                    <span className="text-[10px] font-bold text-green-400 bg-green-500/10 px-2.5 py-1 rounded-md border border-green-500/20 uppercase tracking-wide">
-                      {item.status}
+                    <span
+                      className={cn(
+                        'text-[10px] font-bold px-2.5 py-1 rounded-md uppercase tracking-wide border',
+                        item.ok
+                          ? 'text-green-400 bg-green-500/10 border-green-500/20'
+                          : 'text-red-400 bg-red-500/10 border-red-500/20',
+                      )}
+                    >
+                      {item.ok
+                        ? t('dashboard.systemStatus.operational')
+                        : t('dashboard.systemStatus.offline')}
                     </span>
                   </div>
                 ))}

@@ -7,12 +7,16 @@ import {
   LayoutDashboard, 
   MessageSquare, 
   Bot,
+  Activity,
+  Plug,
+  FolderKanban,
   Users, 
+  UsersRound,
+  TrendingUp,
   Settings, 
   LogOut,
   Menu,
-  X,
-  ChevronRight
+  X
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '../lib/utils';
@@ -33,9 +37,34 @@ export function Sidebar() {
       icon: LayoutDashboard,
     },
     {
+      name: t('sidebar.projects'),
+      href: '/dashboard/projects',
+      icon: FolderKanban,
+    },
+    {
+      name: t('sidebar.scoring'),
+      href: '/dashboard/scoring',
+      icon: TrendingUp,
+    },
+    {
+      name: t('sidebar.analytics'),
+      href: '/dashboard/analytics',
+      icon: Activity,
+    },
+    {
+      name: t('sidebar.integrations'),
+      href: '/dashboard/integrations',
+      icon: Plug,
+    },
+    {
       name: t('sidebar.campaigns'),
       href: '/dashboard/campaigns',
       icon: MessageSquare,
+    },
+    {
+      name: t('sidebar.groups'),
+      href: '/dashboard/groups',
+      icon: UsersRound,
     },
     {
       name: t('sidebar.automations'),

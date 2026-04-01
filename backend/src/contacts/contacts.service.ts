@@ -21,6 +21,24 @@ export class ContactsService {
     });
   }
 
+  private async ensureProjectAccess(params: {
+    userId: string;
+    projectId: string;
+  }) {
+    const project = await this.prisma.project.findFirst({
+      where: {
+        id: params.projectId,
+        OR: [
+          { ownerId: params.userId },
+          { members: { some: { userId: params.userId } } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!project) throw new Error('Access denied to project');
+    return project;
+  }
+
   async createForUser(data: {
     name: string;
     phone: string;
@@ -68,14 +86,46 @@ export class ContactsService {
     }
   }
 
-  async findAll(userId?: string) {
+  async findAll(userId?: string): Promise<unknown[]>;
+  async findAll(data?: {
+    userId?: string;
+    projectId?: string;
+    minScore?: number;
+    tag?: string;
+  }): Promise<unknown[]>;
+  async findAll(
+    arg?:
+      | string
+      | {
+          userId?: string;
+          projectId?: string;
+          minScore?: number;
+          tag?: string;
+        },
+  ) {
+    const data = typeof arg === 'string' ? { userId: arg } : (arg ?? {});
     try {
-      if (userId) {
-        return await this.prisma.contact.findMany({ where: { userId } });
+      if (data.projectId && data.userId) {
+        await this.ensureProjectAccess({
+          userId: data.userId,
+          projectId: data.projectId,
+        });
       }
-      return await this.prisma.contact.findMany();
+      const where: Record<string, unknown> = {};
+      if (data.userId) where.userId = data.userId;
+      if (data.projectId) where.projectId = data.projectId;
+      if (data.minScore !== undefined && !Number.isNaN(data.minScore)) {
+        where.score = { gte: data.minScore };
+      }
+      if (data.tag) {
+        where.tags = { has: data.tag };
+      }
+      return await this.prisma.contact.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
     } catch {
-      if (userId) return this.ensureDemoContacts(userId);
+      if (data.userId) return this.ensureDemoContacts(data.userId);
       const all = Array.from(
         ContactsService.demoContactsByUser.values(),
       ).flat();
@@ -179,6 +229,7 @@ export class ContactsService {
       name: data.name,
       phone: data.phone,
       tags: data.tags ?? [],
+      score: 0,
       userId: data.userId,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -198,6 +249,7 @@ export class ContactsService {
         name: 'João Silva',
         phone: '+55 11 99999-9999',
         tags: ['vip'],
+        score: 10,
         userId,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -207,6 +259,7 @@ export class ContactsService {
         name: 'Maria Souza',
         phone: '+55 11 88888-8888',
         tags: ['lead'],
+        score: 0,
         userId,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -223,6 +276,7 @@ type ContactRecord = {
   name: string;
   phone: string;
   tags: string[];
+  score: number;
   userId: string;
   createdAt: Date;
   updatedAt: Date;

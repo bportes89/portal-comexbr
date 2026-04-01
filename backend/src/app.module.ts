@@ -9,6 +9,11 @@ import { ContactsModule } from './contacts/contacts.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { AutomationsModule } from './automations/automations.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { GroupsModule } from './groups/groups.module';
+import { ProjectsModule } from './projects/projects.module';
+import { LeadScoringModule } from './lead-scoring/lead-scoring.module';
+import { IntegrationsModule } from './integrations/integrations.module';
+import { TemplatesModule } from './templates/templates.module';
 
 @Module({
   imports: [
@@ -54,7 +59,12 @@ import { AnalyticsModule } from './analytics/analytics.module';
     ContactsModule,
     CampaignsModule,
     AutomationsModule,
+    GroupsModule,
+    ProjectsModule,
+    LeadScoringModule,
+    IntegrationsModule,
     AnalyticsModule,
+    TemplatesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

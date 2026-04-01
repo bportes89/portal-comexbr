@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   Param,
   Logger,
@@ -22,13 +23,27 @@ export class CampaignsController {
       name: string;
       message: string;
       userId: string;
+      projectId?: string;
       contactIds: string[];
       instanceName: string;
       delay?: number;
+      scheduledAt?: string;
+      sendWindowStartMin?: number;
+      sendWindowEndMin?: number;
     },
   ) {
     try {
-      return await this.campaignsService.createCampaign(data);
+      const scheduledAt =
+        typeof data.scheduledAt === 'string' && data.scheduledAt.length > 0
+          ? new Date(data.scheduledAt)
+          : undefined;
+      return await this.campaignsService.createCampaign({
+        ...data,
+        scheduledAt:
+          scheduledAt && !Number.isNaN(scheduledAt.getTime())
+            ? scheduledAt
+            : undefined,
+      });
     } catch (error: unknown) {
       this.logger.error(error);
       return this.campaignsService.createCampaignInMemory(data);
@@ -67,5 +82,15 @@ export class CampaignsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.campaignsService.findOne(id);
+  }
+
+  @Delete(':id')
+  async remove(@Param('id') id: string) {
+    try {
+      return await this.campaignsService.remove(id);
+    } catch (error: unknown) {
+      this.logger.error(error);
+      return { id, deleted: false };
+    }
   }
 }

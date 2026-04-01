@@ -19,6 +19,62 @@ model User {
   contacts         Contact[]
   groups           Group[]
   automations      Automation[]
+  messageTemplates MessageTemplate[]
+  projectMemberships ProjectMember[]
+  ownedProjects      Project[] @relation("ProjectOwner")
+  leadScoreRules    LeadScoreRule[]
+  events            Event[]
+  incomingWebhookEndpoints IncomingWebhookEndpoint[]
+  outgoingWebhookSubscriptions OutgoingWebhookSubscription[]
+  auditLogs         AuditLog[]
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  ownerId     String
+  owner       User     @relation("ProjectOwner", fields: [ownerId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members     ProjectMember[]
+  whatsappSessions WhatsappSession[]
+  campaigns   Campaign[]
+  contacts    Contact[]
+  groups      Group[]
+  automations Automation[]
+  messageTemplates MessageTemplate[]
+  leadScoreRules LeadScoreRule[]
+  events         Event[]
+  incomingWebhookEndpoints IncomingWebhookEndpoint[]
+  outgoingWebhookSubscriptions OutgoingWebhookSubscription[]
+  auditLogs    AuditLog[]
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid())
+  role      String   @default("MEMBER") // OWNER, MEMBER
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, projectId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id])
+  createdAt  DateTime @default(now())
 }
 
 model WhatsappSession {
@@ -29,6 +85,8 @@ model WhatsappSession {
   phone     String?
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -38,11 +96,15 @@ model Contact {
   name      String
   phone     String
   tags      String[]
+  score     Int      @default(0)
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   messages  Message[]
+  events    Event[]
 }
 
 model Group {
@@ -51,6 +113,8 @@ model Group {
   whatsappId String
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -61,11 +125,28 @@ model Campaign {
   message   String
   status    String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
   scheduledAt DateTime?
+  sendWindowStartMin Int?
+  sendWindowEndMin   Int?
+  instanceName String?
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   messages  Message[]
+}
+
+model MessageTemplate {
+  id        String   @id @default(uuid())
+  name      String
+  content   String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Message {
@@ -73,6 +154,8 @@ model Message {
   content   String
   status    String   @default("PENDING") // PENDING, SENT, DELIVERED, READ, FAILED
   sentAt    DateTime?
+  instanceName String?
+  providerMessageId String?
   campaignId String?
   campaign  Campaign? @relation(fields: [campaignId], references: [id])
   contactId String
@@ -87,6 +170,66 @@ model Automation {
   response  String
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model LeadScoreRule {
+  id         String   @id @default(uuid())
+  name       String?
+  eventType  String
+  points     Int
+  conditions Json?
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Event {
+  id        String   @id @default(uuid())
+  type      String
+  source    String   @default("webhook")
+  metadata  Json?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model IncomingWebhookEndpoint {
+  id        String   @id @default(uuid())
+  name      String
+  provider  String   @default("WEBHOOK") // HOTMART, ACTIVECAMPAIGN, CRM, WEBHOOK
+  token     String   @unique
+  enabled   Boolean  @default(true)
+  mapping   Json?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OutgoingWebhookSubscription {
+  id         String   @id @default(uuid())
+  name       String
+  url        String
+  eventTypes String[]
+  secret     String?
+  enabled    Boolean  @default(true)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
