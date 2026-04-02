@@ -14,7 +14,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { Header } from '../../../components/Header';
-import api from '../../../lib/api';
+import api, { isDemoMode } from '../../../lib/api';
 import { cn } from '../../../lib/utils';
 import { useLanguage } from '../../../context/LanguageContext';
 import { useAuth } from '../../../context/AuthContext';
@@ -53,29 +53,62 @@ export default function Projects() {
   const [memberEmail, setMemberEmail] = useState('');
   const [membersSubmitting, setMembersSubmitting] = useState(false);
 
+  const demoKey = useMemo(() => {
+    return `demo:projects:${user?.id ?? 'anonymous'}`;
+  }, [user?.id]);
+
+  const loadDemoProjects = useCallback((): Project[] => {
+    if (!isDemoMode()) return [];
+    try {
+      const raw = window.localStorage.getItem(demoKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((p) => p && typeof p === 'object') as Project[];
+    } catch {
+      return [];
+    }
+  }, [demoKey]);
+
+  const saveDemoProjects = useCallback(
+    (next: Project[]) => {
+      if (!isDemoMode()) return;
+      try {
+        window.localStorage.setItem(demoKey, JSON.stringify(next));
+      } catch {
+        return;
+      }
+    },
+    [demoKey],
+  );
+
   const fetchProjects = useCallback(async () => {
     try {
       const url = user ? `/projects?userId=${encodeURIComponent(user.id)}` : '/projects';
       const response = await api.get(url);
       setProjects(response.data);
     } catch (error) {
-      console.error('Error fetching projects:', error);
-      setProjects((prev) => {
-        if (prev.length > 0) return prev;
-        const now = new Date().toISOString();
-        return [
-          {
-            id: '1',
-            name: 'Lançamento Março',
-            ownerId: user?.id ?? 'mock-user-id',
-            createdAt: now,
-          },
-        ];
-      });
+      if (isDemoMode()) {
+        setProjects(loadDemoProjects());
+      } else {
+        console.error('Error fetching projects:', error);
+        setProjects((prev) => {
+          if (prev.length > 0) return prev;
+          const now = new Date().toISOString();
+          return [
+            {
+              id: '1',
+              name: 'Lançamento Março',
+              ownerId: user?.id ?? 'mock-user-id',
+              createdAt: now,
+            },
+          ];
+        });
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [user]);
+  }, [loadDemoProjects, user]);
 
   const fetchMembers = useCallback(
     async (project: Project) => {
@@ -141,8 +174,29 @@ export default function Projects() {
       setFormData({ name: '' });
       fetchProjects();
     } catch (error) {
-      console.error('Error creating project:', error);
-      alert(t('common.error'));
+      if (isDemoMode()) {
+        const now = new Date().toISOString();
+        const id =
+          typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : String(Date.now());
+        const created: Project = {
+          id,
+          name: formData.name.trim() || t('projects.new'),
+          ownerId: user.id,
+          createdAt: now,
+        };
+        setProjects((prev) => {
+          const next = [created, ...prev];
+          saveDemoProjects(next);
+          return next;
+        });
+        setIsModalOpen(false);
+        setFormData({ name: '' });
+      } else {
+        console.error('Error creating project:', error);
+        alert(t('common.error'));
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -151,6 +205,14 @@ export default function Projects() {
   const deleteProject = async (id: string) => {
     const confirmed = window.confirm(t('common.confirmDelete'));
     if (!confirmed) return;
+    if (isDemoMode()) {
+      setProjects((prev) => {
+        const next = prev.filter((p) => p.id !== id);
+        saveDemoProjects(next);
+        return next;
+      });
+      return;
+    }
     try {
       const url = user
         ? `/projects/${encodeURIComponent(id)}?userId=${encodeURIComponent(user.id)}`

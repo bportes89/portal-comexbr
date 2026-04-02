@@ -16,7 +16,7 @@ import { motion } from 'framer-motion';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { useEffect, useState } from 'react';
-import api from '../../lib/api';
+import api, { isDemoMode } from '../../lib/api';
 
 const container = {
   hidden: { opacity: 0 },
@@ -36,11 +36,20 @@ const item = {
 export default function Dashboard() {
   const { t } = useLanguage();
   const { user } = useAuth();
+  const demo = isDemoMode();
   const [overview, setOverview] = useState<{
     messagesTotal: number;
     activeCampaigns: number;
     connectedNumbers: number;
-  } | null>(null);
+  } | null>(() =>
+    demo
+      ? {
+          messagesTotal: 0,
+          activeCampaigns: 0,
+          connectedNumbers: 0,
+        }
+      : null,
+  );
   const [systemStatus, setSystemStatus] = useState<{
     whatsappApi: { configured: boolean };
     messageQueue: { ok: boolean };
@@ -49,6 +58,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!user) return;
+    if (demo) return;
     const run = async () => {
       try {
         const resp = await api.get(
@@ -68,9 +78,10 @@ export default function Dashboard() {
       }
     };
     run();
-  }, [user]);
+  }, [demo, user]);
 
   useEffect(() => {
+    if (demo) return;
     const run = async () => {
       try {
         const resp = await api.get('/system/status');
@@ -81,7 +92,7 @@ export default function Dashboard() {
       }
     };
     run();
-  }, []);
+  }, [demo]);
 
   return (
     <>
@@ -283,7 +294,6 @@ export default function Dashboard() {
               <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:opacity-20 transition-opacity duration-700">
                 <Smartphone className="h-48 w-48 -rotate-12 translate-x-10 -translate-y-10" />
               </div>
-              <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-overlay"></div>
               
               <div className="relative z-10">
                 <div className="h-12 w-12 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center mb-6 border border-white/20 shadow-inner">
