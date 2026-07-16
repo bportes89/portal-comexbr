@@ -26,6 +26,10 @@ interface WhatsappSession {
   name: string;
   status: string;
   projectId?: string | null;
+  phone?: string | null;
+  owner?: string | null;
+  qrcode?: string | null;
+  connected?: boolean;
 }
 
 interface Project {
@@ -48,6 +52,14 @@ const item = {
   show: { opacity: 1, y: 0 }
 };
 
+function isSessionReallyConnected(session?: WhatsappSession | null) {
+  if (!session) return false;
+  return (
+    session.status === 'CONNECTED' &&
+    Boolean(session.phone || session.owner || session.connected === true)
+  );
+}
+
 export default function Settings() {
   const { t, language } = useLanguage();
   const { user } = useAuth();
@@ -60,6 +72,8 @@ export default function Settings() {
   const [sessions, setSessions] = useState<WhatsappSession[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const selectedSession =
+    sessions.find((session) => session.name === instanceName) ?? sessions[0] ?? null;
 
   useEffect(() => {
     if (!user) return;
@@ -81,7 +95,7 @@ export default function Settings() {
           const session = nextSessions[0];
           setInstanceName(session.name);
           setSelectedProjectId(session.projectId ?? '');
-          setIsConnected(session.status === 'CONNECTED');
+          setIsConnected(isSessionReallyConnected(session));
         } else {
           setIsConnected(false);
           setSelectedProjectId('');
@@ -105,7 +119,10 @@ export default function Settings() {
       if (active) {
         setInstanceName(active.name);
         setSelectedProjectId(active.projectId ?? '');
-        setIsConnected(active.status === 'CONNECTED');
+        setIsConnected(isSessionReallyConnected(active));
+      } else {
+        setIsConnected(false);
+        setSelectedProjectId('');
       }
     } catch (error) {
       console.error('Error fetching sessions:', error);
@@ -306,8 +323,11 @@ export default function Settings() {
                           setInstanceName(next);
                           const selected = sessions.find((s) => s.name === next);
                           if (selected) {
-                            setIsConnected(selected.status === 'CONNECTED');
+                            setIsConnected(isSessionReallyConnected(selected));
                             setSelectedProjectId(selected.projectId ?? '');
+                          } else {
+                            setIsConnected(false);
+                            setSelectedProjectId('');
                           }
                         }}
                         className="w-full px-4 py-2 bg-slate-800/50 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-green-500/50"
@@ -451,7 +471,9 @@ export default function Settings() {
                         </div>
                         <div>
                           <p className="text-sm font-bold text-white">{t('settings.whatsapp.businessAccount')}</p>
-                          <p className="text-xs text-slate-400">{selectedSession?.instance?.owner || '—'}</p>
+                          <p className="text-xs text-slate-400">
+                            {selectedSession?.phone || selectedSession?.owner || '—'}
+                          </p>
                         </div>
                         <div className="ml-auto">
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10 text-green-400 text-xs font-medium border border-green-500/20">
