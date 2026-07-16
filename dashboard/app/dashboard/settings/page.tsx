@@ -136,7 +136,8 @@ export default function Settings() {
       } else if (response.data && response.data.base64) {
         setQrCode(response.data.base64);
         setIsGeneratingQr(false);
-      } else if (response.data && response.data.instance && response.data.instance.status === 'open') {
+      } else if (response.data && response.data.instance && response.data.instance.status === 'open' && response.data.instance.connected === true) {
+         // Só marca como conectado quando há confirmação real de conexão
          setIsConnected(true);
          setIsScanning(false);
          setIsGeneratingQr(false);
@@ -450,7 +451,7 @@ export default function Settings() {
                         </div>
                         <div>
                           <p className="text-sm font-bold text-white">{t('settings.whatsapp.businessAccount')}</p>
-                          <p className="text-xs text-slate-400">+55 11 99999-9999</p>
+                          <p className="text-xs text-slate-400">{selectedSession?.instance?.owner || '—'}</p>
                         </div>
                         <div className="ml-auto">
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10 text-green-400 text-xs font-medium border border-green-500/20">
