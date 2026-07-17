@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
+import { AxiosError } from 'axios';
 import { lastValueFrom } from 'rxjs';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -54,6 +55,10 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 @Injectable()
 export class WhatsappService {
   private readonly logger = new Logger(WhatsappService.name);
@@ -69,6 +74,102 @@ export class WhatsappService {
   ) {
     this.apiUrl = this.configService.get<string>('EVOLUTION_API_URL') || '';
     this.apiKey = this.configService.get<string>('EVOLUTION_API_KEY') || '';
+  }
+
+  private buildHeaders() {
+    return {
+      apikey: this.apiKey,
+      'Content-Type': 'application/json',
+    };
+  }
+
+  private extractQrCode(data: unknown): string | null {
+    if (!isRecord(data)) return null;
+
+    const directBase64 =
+      typeof data['base64'] === 'string' ? data['base64'] : null;
+    if (directBase64) return directBase64;
+
+    const directQrCode =
+      typeof data['qrcode'] === 'string' ? data['qrcode'] : null;
+    if (directQrCode) return directQrCode;
+
+    const qrCode = isRecord(data['qrcode']) ? data['qrcode'] : undefined;
+    const qrCodeBase64 =
+      qrCode && typeof qrCode['base64'] === 'string' ? qrCode['base64'] : null;
+    if (qrCodeBase64) return qrCodeBase64;
+
+    const pairingCode =
+      typeof data['pairingCode'] === 'string' ? data['pairingCode'] : null;
+    if (pairingCode) return pairingCode;
+
+    return null;
+  }
+
+  private extractPhone(data: unknown): string | null {
+    if (!isRecord(data)) return null;
+
+    const candidates: unknown[] = [
+      data['number'],
+      data['phone'],
+      data['owner'],
+      isRecord(data['instance']) ? data['instance']['number'] : undefined,
+      isRecord(data['instance']) ? data['instance']['phone'] : undefined,
+      isRecord(data['instance']) ? data['instance']['owner'] : undefined,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+
+    return null;
+  }
+
+  private isConnectedResponse(data: unknown): boolean {
+    if (!isRecord(data)) return false;
+
+    const directConnected = data['connected'];
+    if (typeof directConnected === 'boolean') return directConnected;
+
+    const directStatus = data['status'];
+    if (
+      typeof directStatus === 'string' &&
+      ['open', 'connected', 'CONNECTED'].includes(directStatus)
+    ) {
+      return true;
+    }
+
+    const instance = isRecord(data['instance']) ? data['instance'] : undefined;
+    if (instance) {
+      const connected = instance['connected'];
+      if (typeof connected === 'boolean') return connected;
+
+      const status = instance['status'];
+      if (
+        typeof status === 'string' &&
+        ['open', 'connected', 'CONNECTED'].includes(status)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private async updateSessionState(
+    instanceName: string,
+    data: { status?: string; qrcode?: string | null; phone?: string | null },
+  ) {
+    await this.prisma.whatsappSession.updateMany({
+      where: { name: instanceName },
+      data: {
+        ...(data.status ? { status: data.status } : {}),
+        ...(data.qrcode !== undefined ? { qrcode: data.qrcode } : {}),
+        ...(data.phone !== undefined ? { phone: data.phone } : {}),
+      },
+    });
   }
 
   async getSessions(userId: string, projectId?: string) {
@@ -164,27 +265,74 @@ export class WhatsappService {
 
   async connectInstance(instanceName: string) {
     try {
-      // Check if instance exists or create new one
-      // For simplicity, we try to create it. If it exists, Evolution API might return error or existing info.
-      const response = await lastValueFrom(
+      const createResponse = await lastValueFrom(
         this.httpService.post<unknown>(
           `${this.apiUrl}/instance/create`,
           {
             instanceName,
-            token: '',
+            token: this.apiKey,
             qrcode: true,
+            integration: 'WHATSAPP-BAILEYS',
           },
           {
-            headers: {
-              apikey: this.apiKey,
-            },
+            headers: this.buildHeaders(),
           },
         ),
       );
-      return response.data;
+
+      const createData = createResponse.data;
+      const createQrCode = this.extractQrCode(createData);
+      const createPhone = this.extractPhone(createData);
+      const createConnected = this.isConnectedResponse(createData);
+
+      if (createQrCode || createConnected) {
+        await this.updateSessionState(instanceName, {
+          status: createConnected ? 'CONNECTED' : 'QRCODE',
+          qrcode: createQrCode,
+          phone: createPhone,
+        });
+
+        return {
+          ...(isRecord(createData) ? createData : {}),
+          ...(createQrCode ? { base64: createQrCode } : {}),
+          ...(createConnected ? { connected: true } : {}),
+          ...(createPhone ? { phone: createPhone } : {}),
+        };
+      }
+
+      const connectResponse = await lastValueFrom(
+        this.httpService.get<unknown>(`${this.apiUrl}/instance/connect/${instanceName}`, {
+          headers: this.buildHeaders(),
+        }),
+      );
+
+      const connectData = connectResponse.data;
+      const connectQrCode = this.extractQrCode(connectData);
+      const connectPhone = this.extractPhone(connectData);
+      const connectConnected = this.isConnectedResponse(connectData);
+
+      await this.updateSessionState(instanceName, {
+        status: connectConnected ? 'CONNECTED' : connectQrCode ? 'QRCODE' : 'DISCONNECTED',
+        qrcode: connectQrCode,
+        phone: connectPhone,
+      });
+
+      return {
+        ...(isRecord(connectData) ? connectData : {}),
+        ...(connectQrCode ? { base64: connectQrCode } : {}),
+        ...(connectConnected ? { connected: true } : {}),
+        ...(connectPhone ? { phone: connectPhone } : {}),
+      };
     } catch (error: unknown) {
-      this.logger.error(`Error connecting instance: ${getErrorMessage(error)}`);
-      // In production, handle specific errors (e.g., instance already exists)
+      const details =
+        error instanceof AxiosError
+          ? JSON.stringify(error.response?.data ?? {})
+          : getErrorMessage(error);
+      this.logger.error(`Error connecting instance: ${details}`);
+      await this.updateSessionState(instanceName, {
+        status: 'DISCONNECTED',
+        qrcode: null,
+      });
       throw error;
     }
   }

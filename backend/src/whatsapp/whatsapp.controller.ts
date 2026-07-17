@@ -6,6 +6,7 @@ import {
   Get,
   Query,
   Headers,
+  BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WhatsappService } from './whatsapp.service';
@@ -86,7 +87,7 @@ export class WhatsappController {
       return await this.whatsappService.connectInstance(instanceName);
     } catch (error: unknown) {
       this.logger.error(error);
-      return { instance: { status: 'open' } };
+      throw new BadRequestException('Falha ao gerar QR Code do WhatsApp');
     }
   }
 
