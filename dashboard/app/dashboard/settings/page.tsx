@@ -37,6 +37,8 @@ interface Project {
   name: string;
 }
 
+const WHATSAPP_STATUS_POLL_INTERVAL_MS = 5000;
+
 const container = {
   hidden: { opacity: 0 },
   show: {
@@ -54,10 +56,12 @@ const item = {
 
 function isSessionReallyConnected(session?: WhatsappSession | null) {
   if (!session) return false;
-  return (
-    session.status === 'CONNECTED' &&
-    Boolean(session.phone || session.owner || session.connected === true)
-  );
+  return session.status === 'CONNECTED' && !session.qrcode;
+}
+
+function isSessionWaitingConnection(session?: WhatsappSession | null) {
+  if (!session) return false;
+  return session.status === 'QRCODE';
 }
 
 export default function Settings() {
@@ -108,26 +112,50 @@ export default function Settings() {
     run();
   }, [user]);
 
-  const refreshSessions = async () => {
+  const refreshSessions = async (targetInstanceName?: string) => {
     if (!user) return;
     try {
       const response = await api.get(`/whatsapp/sessions?userId=${user.id}`);
       const nextSessions: WhatsappSession[] = response.data ?? [];
       setSessions(nextSessions);
 
-      const active = nextSessions.find((s) => s.name === instanceName) ?? nextSessions[0];
+      const active =
+        nextSessions.find((s) => s.name === (targetInstanceName ?? instanceName)) ??
+        nextSessions[0];
       if (active) {
+        const connected = isSessionReallyConnected(active);
         setInstanceName(active.name);
         setSelectedProjectId(active.projectId ?? '');
-        setIsConnected(isSessionReallyConnected(active));
+        setIsConnected(connected);
+        if (connected) {
+          setQrCode(null);
+          setIsScanning(false);
+          setIsGeneratingQr(false);
+        } else if (qrCode && isSessionWaitingConnection(active)) {
+          setIsScanning(true);
+          setIsGeneratingQr(false);
+        }
+        return active;
       } else {
         setIsConnected(false);
         setSelectedProjectId('');
+        return null;
       }
     } catch (error) {
       console.error('Error fetching sessions:', error);
+      return null;
     }
   };
+
+  useEffect(() => {
+    if (!user || !instanceName || !isScanning) return;
+
+    const interval = window.setInterval(() => {
+      void refreshSessions(instanceName);
+    }, WHATSAPP_STATUS_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [user, instanceName, isScanning]);
 
   const handleConnect = async () => {
     if (!user) return;
@@ -158,8 +186,9 @@ export default function Settings() {
          setIsConnected(true);
          setIsScanning(false);
          setIsGeneratingQr(false);
+         setQrCode(null);
       }
-      refreshSessions();
+      await refreshSessions(name);
 
     } catch (error) {
       console.error('Error connecting to WhatsApp:', error);

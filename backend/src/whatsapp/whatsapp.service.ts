@@ -158,6 +158,31 @@ export class WhatsappService {
     return false;
   }
 
+  private extractConnectionState(data: unknown): string | null {
+    if (!isRecord(data)) return null;
+
+    const candidates: unknown[] = [
+      data['state'],
+      data['status'],
+      isRecord(data['instance']) ? data['instance']['state'] : undefined,
+      isRecord(data['instance']) ? data['instance']['status'] : undefined,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim().toLowerCase();
+      }
+    }
+
+    return null;
+  }
+
+  private mapConnectionStateToSessionStatus(state: string | null): string {
+    if (state === 'open' || state === 'connected') return 'CONNECTED';
+    if (state === 'connecting') return 'QRCODE';
+    return 'DISCONNECTED';
+  }
+
   private async updateSessionState(
     instanceName: string,
     data: { status?: string; qrcode?: string | null; phone?: string | null },
@@ -172,7 +197,59 @@ export class WhatsappService {
     });
   }
 
+  private async syncSessionWithEvolution(instanceName: string) {
+    try {
+      const response = await lastValueFrom(
+        this.httpService.get<unknown>(
+          `${this.apiUrl}/instance/connectionState/${instanceName}`,
+          {
+            headers: this.buildHeaders(),
+          },
+        ),
+      );
+
+      const state = this.extractConnectionState(response.data);
+      const status = this.mapConnectionStateToSessionStatus(state);
+
+      await this.updateSessionState(instanceName, {
+        status,
+        qrcode: status === 'CONNECTED' ? null : undefined,
+      });
+    } catch (error: unknown) {
+      const axiosError = error instanceof AxiosError ? error : undefined;
+      const status = axiosError?.response?.status;
+
+      if (status === 404) {
+        await this.updateSessionState(instanceName, {
+          status: 'DISCONNECTED',
+          qrcode: null,
+          phone: null,
+        });
+        return;
+      }
+
+      const details = axiosError
+        ? JSON.stringify(axiosError.response?.data ?? {})
+        : getErrorMessage(error);
+      this.logger.warn(
+        `Error syncing session ${instanceName} with Evolution: ${details}`,
+      );
+    }
+  }
+
   async getSessions(userId: string, projectId?: string) {
+    const sessions = await this.prisma.whatsappSession.findMany({
+      where: {
+        userId,
+        ...(projectId ? { projectId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    await Promise.all(
+      sessions.map((session) => this.syncSessionWithEvolution(session.name)),
+    );
+
     return this.prisma.whatsappSession.findMany({
       where: {
         userId,
