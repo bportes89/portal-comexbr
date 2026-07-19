@@ -80,6 +80,17 @@ export default function Settings() {
     sessions.find((session) => session.name === instanceName) ?? sessions[0] ?? null;
 
   useEffect(() => {
+    const connected = isSessionReallyConnected(selectedSession);
+    setIsConnected(connected);
+
+    if (connected) {
+      setQrCode(null);
+      setIsScanning(false);
+      setIsGeneratingQr(false);
+    }
+  }, [selectedSession]);
+
+  useEffect(() => {
     if (!user) return;
 
     const run = async () => {

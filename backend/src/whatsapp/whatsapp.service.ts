@@ -183,6 +183,111 @@ export class WhatsappService {
     return 'DISCONNECTED';
   }
 
+  private extractInstanceSnapshot(
+    data: unknown,
+    instanceName: string,
+  ): { state: string | null; phone: string | null } | null {
+    const candidates: unknown[] = [];
+
+    if (Array.isArray(data)) {
+      candidates.push(...data);
+    } else if (isRecord(data)) {
+      candidates.push(data);
+
+      if (Array.isArray(data['instances'])) {
+        candidates.push(...data['instances']);
+      }
+
+      if (Array.isArray(data['data'])) {
+        candidates.push(...data['data']);
+      } else if (data['data']) {
+        candidates.push(data['data']);
+      }
+
+      if (data['instance']) {
+        candidates.push(data['instance']);
+      }
+    }
+
+    for (const candidate of candidates) {
+      if (!isRecord(candidate)) continue;
+
+      const candidateName =
+        typeof candidate['name'] === 'string'
+          ? candidate['name']
+          : typeof candidate['instanceName'] === 'string'
+            ? candidate['instanceName']
+            : null;
+
+      if (candidateName && candidateName !== instanceName) continue;
+
+      const state = this.extractConnectionState(candidate);
+      const phone = this.extractPhone(candidate);
+
+      if (state || phone || candidateName === instanceName) {
+        return { state, phone };
+      }
+    }
+
+    return null;
+  }
+
+  private async fetchEvolutionConnectionSnapshot(instanceName: string) {
+    const attempts: Array<() => Promise<unknown>> = [
+      async () =>
+        (
+          await lastValueFrom(
+            this.httpService.get<unknown>(
+              `${this.apiUrl}/instance/connectionState/${instanceName}`,
+              {
+                headers: this.buildHeaders(),
+              },
+            ),
+          )
+        ).data,
+      async () =>
+        (
+          await lastValueFrom(
+            this.httpService.get<unknown>(`${this.apiUrl}/instance/connectionState`, {
+              headers: this.buildHeaders(),
+              params: { instanceName },
+            }),
+          )
+        ).data,
+      async () =>
+        (
+          await lastValueFrom(
+            this.httpService.get<unknown>(`${this.apiUrl}/instance/fetchInstances`, {
+              headers: this.buildHeaders(),
+              params: { instanceName },
+            }),
+          )
+        ).data,
+      async () =>
+        (
+          await lastValueFrom(
+            this.httpService.get<unknown>(`${this.apiUrl}/instance/fetchInstances`, {
+              headers: this.buildHeaders(),
+            }),
+          )
+        ).data,
+    ];
+
+    let lastError: unknown;
+
+    for (const attempt of attempts) {
+      try {
+        const data = await attempt();
+        const snapshot = this.extractInstanceSnapshot(data, instanceName);
+        if (snapshot) return snapshot;
+      } catch (error: unknown) {
+        lastError = error;
+      }
+    }
+
+    throw lastError ?? new Error('Failed to fetch instance state from Evolution');
+  }
+
   private async updateSessionState(
     instanceName: string,
     data: { status?: string; qrcode?: string | null; phone?: string | null },
@@ -199,21 +304,14 @@ export class WhatsappService {
 
   private async syncSessionWithEvolution(instanceName: string) {
     try {
-      const response = await lastValueFrom(
-        this.httpService.get<unknown>(
-          `${this.apiUrl}/instance/connectionState/${instanceName}`,
-          {
-            headers: this.buildHeaders(),
-          },
-        ),
-      );
-
-      const state = this.extractConnectionState(response.data);
+      const snapshot = await this.fetchEvolutionConnectionSnapshot(instanceName);
+      const state = snapshot.state;
       const status = this.mapConnectionStateToSessionStatus(state);
 
       await this.updateSessionState(instanceName, {
         status,
         qrcode: status === 'CONNECTED' ? null : undefined,
+        phone: status === 'CONNECTED' ? snapshot.phone : undefined,
       });
     } catch (error: unknown) {
       const axiosError = error instanceof AxiosError ? error : undefined;
