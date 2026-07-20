@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Portal ComexBr",
-  description: "Portal ComexBr - WhatsApp Automation",
+  title: "Portal ComexBr | Automacao Comercial no WhatsApp",
+  description: "Plataforma para campanhas, automacoes, atendimento e operacao comercial no WhatsApp com foco em escala, controle e conversao.",
 };
 
 import { LanguageProvider } from "../context/LanguageContext";
