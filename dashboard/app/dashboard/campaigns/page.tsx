@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { 
   Plus, 
   Search, 
@@ -61,6 +61,97 @@ type MessageTemplate = {
   createdAt: string;
 };
 
+function normalizeCampaignStatus(
+  campaign: Campaign,
+): 'draft' | 'scheduled' | 'sending' | 'completed' | 'failed' | 'paused' {
+  const messages = campaign.messages ?? [];
+  if (messages.length > 0) {
+    const statuses = messages.map((m) => String(m.status || '').toUpperCase());
+    const pending = statuses.filter((s) => s === 'PENDING').length;
+    if (pending === 0) {
+      const failed = statuses.filter((s) => s === 'FAILED').length;
+      if (failed === messages.length) return 'failed';
+      if (statuses.some((s) => ['SENT', 'DELIVERED', 'READ'].includes(s))) {
+        return 'completed';
+      }
+    }
+  }
+
+  const raw = String(campaign.status || '').trim();
+  const lower = raw.toLowerCase();
+  if (
+    lower === 'draft' ||
+    lower === 'scheduled' ||
+    lower === 'sending' ||
+    lower === 'completed' ||
+    lower === 'failed' ||
+    lower === 'paused'
+  ) {
+    return lower;
+  }
+
+  const scheduleRaw = campaign.scheduledAt ?? campaign.scheduledFor;
+  const scheduleDate = scheduleRaw ? new Date(scheduleRaw) : null;
+  const hasFutureSchedule =
+    scheduleDate &&
+    Number.isFinite(scheduleDate.getTime()) &&
+    scheduleDate.getTime() > Date.now();
+
+  switch (raw.toUpperCase()) {
+    case 'PENDING':
+      return hasFutureSchedule ? 'scheduled' : 'sending';
+    case 'PROCESSING':
+      return 'sending';
+    case 'SCHEDULED':
+      return hasFutureSchedule ? 'scheduled' : 'sending';
+    case 'COMPLETED':
+      return 'completed';
+    case 'FAILED':
+      return 'failed';
+    case 'PAUSED':
+      return 'paused';
+    case 'DRAFT':
+      return 'draft';
+    default:
+      return 'sending';
+  }
+}
+
+function getCampaignStats(campaign: Campaign) {
+  if (campaign.stats) return campaign.stats;
+
+  const messages = campaign.messages ?? [];
+  let sent = 0;
+  let delivered = 0;
+  let read = 0;
+  let failed = 0;
+
+  for (const msg of messages) {
+    const status = String(msg.status || '').toUpperCase();
+    if (status === 'FAILED') failed += 1;
+    if (status === 'READ') read += 1;
+    if (status === 'DELIVERED') delivered += 1;
+    if (status === 'SENT') sent += 1;
+  }
+
+  sent += delivered + read;
+  delivered += read;
+
+  return { sent, delivered, read, failed };
+}
+
+function campaignNeedsLiveUpdates(campaign: Campaign) {
+  const status = normalizeCampaignStatus(campaign);
+  if (status === 'sending') return true;
+  if (status !== 'scheduled') return false;
+
+  const scheduleRaw = campaign.scheduledAt ?? campaign.scheduledFor;
+  if (!scheduleRaw) return true;
+  const when = new Date(scheduleRaw);
+  if (!Number.isFinite(when.getTime())) return true;
+  return when.getTime() <= Date.now() + 2 * 60_000;
+}
+
 export default function Campaigns() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -90,6 +181,8 @@ export default function Campaigns() {
     sendWindowStart: '08:00',
     sendWindowEnd: '22:00',
   });
+  const campaignsRef = useRef(campaigns);
+  campaignsRef.current = campaigns;
 
   useEffect(() => {
     fetchCampaigns();
@@ -103,6 +196,28 @@ export default function Campaigns() {
       fetchCampaigns();
       fetchTemplates();
     }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const refresh = async () => {
+      const needsUpdate = campaignsRef.current.some(campaignNeedsLiveUpdates);
+      if (!needsUpdate) return;
+
+      try {
+        const response = await api.get(
+          `/campaigns?userId=${encodeURIComponent(user.id)}`,
+        );
+        setCampaigns(response.data);
+      } catch (error) {
+        console.error('Error refreshing campaigns:', error);
+      }
+    };
+
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 5000);
+    return () => window.clearInterval(interval);
   }, [user]);
 
   const templatesById = useMemo(() => {
@@ -144,7 +259,8 @@ export default function Campaigns() {
     }
   };
 
-  const fetchCampaigns = async () => {
+  const fetchCampaigns = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
       const response = await api.get(
         user ? `/campaigns?userId=${encodeURIComponent(user.id)}` : '/campaigns',
@@ -175,7 +291,7 @@ export default function Campaigns() {
         ]);
       }
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
@@ -283,76 +399,12 @@ export default function Campaigns() {
     }
   };
 
-  const normalizeCampaignStatus = (
-    campaign: Campaign,
-  ): 'draft' | 'scheduled' | 'sending' | 'completed' | 'failed' | 'paused' => {
-    const raw = String(campaign.status || '').trim();
-    const lower = raw.toLowerCase();
-    if (
-      lower === 'draft' ||
-      lower === 'scheduled' ||
-      lower === 'sending' ||
-      lower === 'completed' ||
-      lower === 'failed' ||
-      lower === 'paused'
-    ) {
-      return lower;
-    }
-
-    const scheduleRaw = campaign.scheduledAt ?? campaign.scheduledFor;
-    const scheduleDate = scheduleRaw ? new Date(scheduleRaw) : null;
-    const hasFutureSchedule =
-      scheduleDate &&
-      Number.isFinite(scheduleDate.getTime()) &&
-      scheduleDate.getTime() > Date.now();
-
-    switch (raw.toUpperCase()) {
-      case 'PENDING':
-        return hasFutureSchedule ? 'scheduled' : 'sending';
-      case 'PROCESSING':
-        return 'sending';
-      case 'SCHEDULED':
-        return 'scheduled';
-      case 'COMPLETED':
-        return 'completed';
-      case 'FAILED':
-        return 'failed';
-      case 'PAUSED':
-        return 'paused';
-      case 'DRAFT':
-        return 'draft';
-      default:
-        return 'sending';
-    }
-  };
-
-  const getCampaignStats = (campaign: Campaign) => {
-    if (campaign.stats) return campaign.stats;
-
-    const messages = campaign.messages ?? [];
-    let sent = 0;
-    let delivered = 0;
-    let read = 0;
-    let failed = 0;
-
-    for (const msg of messages) {
-      const status = String(msg.status || '').toUpperCase();
-      if (status === 'FAILED') failed += 1;
-      if (status === 'READ') read += 1;
-      if (status === 'DELIVERED') delivered += 1;
-      if (status === 'SENT') sent += 1;
-    }
-
-    sent += delivered + read;
-    delivered += read;
-
-    return { sent, delivered, read, failed };
-  };
-
   const openReport = (campaign: Campaign) => {
     setReportCampaign(campaign);
     setIsReportModalOpen(true);
   };
+
+  const filters = ['all', 'sending', 'scheduled', 'completed', 'drafts'];
 
   const deleteCampaign = async (campaignId: string) => {
     const confirmed = window.confirm(t('common.confirmDelete'));
