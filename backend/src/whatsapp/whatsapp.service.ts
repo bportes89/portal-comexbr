@@ -7,6 +7,8 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { isMessageQueueEnabled } from '../queue/message-queue.state';
+import { normalizeWhatsAppNumber } from './phone.util';
+import { WhatsAppNotConnectedError } from './whatsapp.errors';
 
 interface SendMessageJobData {
   instanceName: string;
@@ -114,14 +116,19 @@ export class WhatsappService {
       data['number'],
       data['phone'],
       data['owner'],
+      data['ownerJid'],
       isRecord(data['instance']) ? data['instance']['number'] : undefined,
       isRecord(data['instance']) ? data['instance']['phone'] : undefined,
       isRecord(data['instance']) ? data['instance']['owner'] : undefined,
+      isRecord(data['instance']) ? data['instance']['ownerJid'] : undefined,
     ];
 
     for (const candidate of candidates) {
       if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate.trim();
+        const value = candidate.trim();
+        const ownerMatch = /^(\d+)@/.exec(value);
+        if (ownerMatch) return ownerMatch[1];
+        return value;
       }
     }
 
@@ -130,6 +137,14 @@ export class WhatsappService {
 
   private isConnectedResponse(data: unknown): boolean {
     if (!isRecord(data)) return false;
+
+    const connectionStatus = data['connectionStatus'];
+    if (
+      typeof connectionStatus === 'string' &&
+      connectionStatus.toLowerCase() === 'open'
+    ) {
+      return true;
+    }
 
     const directConnected = data['connected'];
     if (typeof directConnected === 'boolean') return directConnected;
@@ -144,6 +159,14 @@ export class WhatsappService {
 
     const instance = isRecord(data['instance']) ? data['instance'] : undefined;
     if (instance) {
+      const instanceConnectionStatus = instance['connectionStatus'];
+      if (
+        typeof instanceConnectionStatus === 'string' &&
+        instanceConnectionStatus.toLowerCase() === 'open'
+      ) {
+        return true;
+      }
+
       const connected = instance['connected'];
       if (typeof connected === 'boolean') return connected;
 
@@ -163,8 +186,10 @@ export class WhatsappService {
     if (!isRecord(data)) return null;
 
     const candidates: unknown[] = [
+      data['connectionStatus'],
       data['state'],
       data['status'],
+      isRecord(data['instance']) ? data['instance']['connectionStatus'] : undefined,
       isRecord(data['instance']) ? data['instance']['state'] : undefined,
       isRecord(data['instance']) ? data['instance']['status'] : undefined,
     ];
@@ -181,7 +206,22 @@ export class WhatsappService {
   private mapConnectionStateToSessionStatus(state: string | null): string {
     if (state === 'open' || state === 'connected') return 'CONNECTED';
     if (state === 'connecting') return 'QRCODE';
+    if (state === 'close' || state === 'closed' || state === 'disconnected') {
+      return 'DISCONNECTED';
+    }
     return 'DISCONNECTED';
+  }
+
+  async ensureInstanceConnected(instanceName: string) {
+    await this.syncSessionWithEvolution(instanceName);
+    const snapshot = await this.fetchEvolutionConnectionSnapshot(instanceName);
+    const state = snapshot.state?.toLowerCase() ?? null;
+
+    if (state === 'open' || state === 'connected') {
+      return true;
+    }
+
+    throw new WhatsAppNotConnectedError(instanceName);
   }
 
   private extractInstanceSnapshot(
@@ -555,12 +595,15 @@ export class WhatsappService {
   }
 
   async sendMessage(instanceName: string, number: string, text: string) {
+    await this.ensureInstanceConnected(instanceName);
+    const normalizedNumber = normalizeWhatsAppNumber(number);
+
     try {
       const response = await lastValueFrom(
         this.httpService.post<unknown>(
           `${this.apiUrl}/message/sendText/${instanceName}`,
           {
-            number,
+            number: normalizedNumber,
             text,
             delay: 1200,
             presence: 'composing',

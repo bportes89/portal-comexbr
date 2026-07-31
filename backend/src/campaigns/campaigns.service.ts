@@ -4,6 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { normalizeWhatsAppNumber } from '../whatsapp/phone.util';
 import { isMessageQueueEnabled } from '../queue/message-queue.state';
 
 type QueueJob = {
@@ -19,6 +20,11 @@ type QueueJob = {
     removeOnComplete: boolean;
   };
 };
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
 
 @Injectable()
 export class CampaignsService {
@@ -205,10 +211,40 @@ export class CampaignsService {
     const failed = await this.prisma.message.count({
       where: { campaignId, status: 'FAILED' },
     });
+    const sent = await this.prisma.message.count({
+      where: {
+        campaignId,
+        status: { in: ['SENT', 'DELIVERED', 'READ'] },
+      },
+    });
     await this.prisma.campaign.updateMany({
       where: { id: campaignId, status: { not: 'FAILED' } },
-      data: { status: failed > 0 ? 'FAILED' : 'COMPLETED' },
+      data: { status: sent > 0 ? 'COMPLETED' : failed > 0 ? 'FAILED' : 'COMPLETED' },
     });
+  }
+
+  private async failPendingCampaignMessages(
+    campaignId: string,
+    instanceName: string,
+    reason: string,
+  ) {
+    await this.prisma.message.updateMany({
+      where: { campaignId, status: 'PENDING' },
+      data: { status: 'FAILED', instanceName },
+    });
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: 'FAILED', instanceName },
+    });
+    this.logger.error(`Campanha ${campaignId} falhou: ${reason}`);
+  }
+
+  private normalizeContactPhone(phone: string) {
+    try {
+      return normalizeWhatsAppNumber(phone);
+    } catch (error) {
+      throw new Error(`Telefone inválido (${phone}): ${getErrorMessage(error)}`);
+    }
   }
 
   private async dispatchJobsDirectly(
@@ -217,6 +253,17 @@ export class CampaignsService {
     instanceName: string,
   ) {
     if (jobs.length === 0) return;
+
+    try {
+      await this.whatsappService.ensureInstanceConnected(instanceName);
+    } catch (error) {
+      await this.failPendingCampaignMessages(
+        campaignId,
+        instanceName,
+        getErrorMessage(error),
+      );
+      return;
+    }
 
     await this.prisma.campaign.update({
       where: { id: campaignId },
@@ -274,12 +321,24 @@ export class CampaignsService {
         continue;
       }
 
+      const instance = campaign.instanceName ?? '';
+      try {
+        await this.whatsappService.ensureInstanceConnected(instance);
+      } catch (error) {
+        await this.failPendingCampaignMessages(
+          campaign.id,
+          instance,
+          getErrorMessage(error),
+        );
+        continue;
+      }
+
       const perMessageDelayMs = 5000;
       const jobs: QueueJob[] = campaign.messages.map((message, index) => ({
         name: 'sendMessage',
         data: {
           instanceName: message.instanceName ?? campaign.instanceName ?? '',
-          number: message.contact.phone,
+          number: this.normalizeContactPhone(message.contact.phone),
           text: message.content,
           messageId: message.id,
         },
@@ -339,6 +398,10 @@ export class CampaignsService {
         });
     const base = baseAllowed.getTime() < now.getTime() ? now : baseAllowed;
     const startDelayMs = Math.max(0, base.getTime() - now.getTime());
+
+    if (startDelayMs === 0) {
+      await this.whatsappService.ensureInstanceConnected(data.instanceName);
+    }
 
     // 1. Create Campaign in DB
     const campaign = await this.prisma.campaign.create({
@@ -415,7 +478,7 @@ export class CampaignsService {
           name: 'sendMessage',
           data: {
             instanceName: data.instanceName,
-            number: contact.phone,
+            number: this.normalizeContactPhone(contact.phone),
             text: rendered,
             messageId: message.id,
           },

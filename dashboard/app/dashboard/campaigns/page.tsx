@@ -333,11 +333,26 @@ export default function Campaigns() {
     return h * 60 + m;
   };
 
+  const openNewCampaignModal = () => {
+    void fetchSessions();
+    setIsModalOpen(true);
+  };
+
+  const selectedSession = sessions.find((s) => s.name === formData.instanceName);
+  const hasConnectedSession = sessions.some((s) => s.status === 'CONNECTED');
+
   const handleCreateCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
     if (selectedContacts.length === 0) {
       alert(t('campaigns.selectContactsError') || 'Please select at least one contact');
+      return;
+    }
+
+    if (!formData.scheduledAt && selectedSession?.status !== 'CONNECTED') {
+      alert(
+        'WhatsApp desconectado. Vá em Configurações, escaneie o QR Code e tente novamente.',
+      );
       return;
     }
 
@@ -363,9 +378,14 @@ export default function Campaigns() {
       setNewTemplateName('');
       setSelectedContacts([]);
       fetchCampaigns(); // Refresh list
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error creating campaign:', error);
-      alert('Failed to create campaign');
+      const apiError = error as { response?: { data?: { message?: string | string[] } } };
+      const rawMessage = apiError.response?.data?.message;
+      const message = Array.isArray(rawMessage)
+        ? rawMessage.join(', ')
+        : rawMessage || 'Failed to create campaign';
+      alert(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -458,7 +478,7 @@ export default function Campaigns() {
             <p className="text-slate-400 text-sm mt-1">{t('campaigns.subtitle')}</p>
           </div>
           <button 
-            onClick={() => setIsModalOpen(true)}
+            onClick={openNewCampaignModal}
             className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-medium transition-colors shadow-lg shadow-green-600/20"
           >
             <Plus className="h-4 w-4" />
@@ -507,7 +527,7 @@ export default function Campaigns() {
             <h3 className="text-lg font-bold text-gray-900">{t('campaigns.noCampaigns')}</h3>
             <p className="text-gray-500 text-sm mt-1 max-w-sm mx-auto">{t('campaigns.createFirst')}</p>
             <button 
-              onClick={() => setIsModalOpen(true)}
+              onClick={openNewCampaignModal}
               className="mt-6 inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-medium transition-colors"
             >
               <Plus className="h-4 w-4" />
@@ -683,6 +703,11 @@ export default function Campaigns() {
             </div>
             
             <div className="p-6 overflow-y-auto custom-scrollbar">
+              {!hasConnectedSession && (
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  WhatsApp desconectado. Antes de enviar, vá em <strong>Configurações</strong> e escaneie o QR Code novamente.
+                </div>
+              )}
               <form id="campaign-form" onSubmit={handleCreateCampaign} className="space-y-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">

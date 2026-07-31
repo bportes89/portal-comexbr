@@ -7,8 +7,10 @@ import {
   Param,
   Logger,
   Query,
+  BadRequestException,
 } from '@nestjs/common';
 import { CampaignsService } from './campaigns.service';
+import { WhatsAppNotConnectedError } from '../whatsapp/whatsapp.errors';
 
 @Controller('campaigns')
 export class CampaignsController {
@@ -46,6 +48,12 @@ export class CampaignsController {
             : undefined,
       });
     } catch (error: unknown) {
+      if (error instanceof WhatsAppNotConnectedError) {
+        throw new BadRequestException(error.message);
+      }
+      if (error instanceof Error && error.message.includes('Telefone inválido')) {
+        throw new BadRequestException(error.message);
+      }
       this.logger.error(error);
       return this.campaignsService.createCampaignInMemory(data);
     }
