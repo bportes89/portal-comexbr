@@ -30,6 +30,7 @@ export class CampaignsController {
       scheduledAt?: string;
       sendWindowStartMin?: number;
       sendWindowEndMin?: number;
+      timezoneOffsetMin?: number;
     },
   ) {
     try {

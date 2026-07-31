@@ -237,6 +237,7 @@ export default function Campaigns() {
         scheduledAt: formData.scheduledAt ? localDateTimeInputToIso(formData.scheduledAt) : undefined,
         sendWindowStartMin,
         sendWindowEndMin,
+        timezoneOffsetMin: new Date().getTimezoneOffset(),
         userId: user.id,
         contactIds: selectedContacts,
       });

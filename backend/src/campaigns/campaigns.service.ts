@@ -77,10 +77,43 @@ export class CampaignsService {
     });
   }
 
+  private getTimezoneOffsetMin(explicit?: number, fallback = new Date()) {
+    return typeof explicit === 'number' && Number.isFinite(explicit)
+      ? Math.floor(explicit)
+      : fallback.getTimezoneOffset();
+  }
+
+  private getWallClockMinutes(date: Date, timezoneOffsetMin?: number) {
+    const offset = this.getTimezoneOffsetMin(timezoneOffsetMin, date);
+    const wall = new Date(date.getTime() - offset * 60_000);
+    return wall.getUTCHours() * 60 + wall.getUTCMinutes();
+  }
+
+  private withWallClockMinutes(
+    base: Date,
+    minutes: number,
+    timezoneOffsetMin?: number,
+    dayDelta = 0,
+  ) {
+    const offset = this.getTimezoneOffsetMin(timezoneOffsetMin, base);
+    const wall = new Date(base.getTime() - offset * 60_000);
+    const nextLocal = Date.UTC(
+      wall.getUTCFullYear(),
+      wall.getUTCMonth(),
+      wall.getUTCDate() + dayDelta,
+      Math.floor(minutes / 60),
+      minutes % 60,
+      0,
+      0,
+    );
+    return new Date(nextLocal + offset * 60_000);
+  }
+
   private computeNextAllowedStart(params: {
     base: Date;
     startMin?: number;
     endMin?: number;
+    timezoneOffsetMin?: number;
   }) {
     const startMin =
       typeof params.startMin === 'number' &&
@@ -99,7 +132,7 @@ export class CampaignsService {
     if (startMin === undefined || endMin === undefined) return params.base;
 
     const base = new Date(params.base);
-    const currentMin = base.getHours() * 60 + base.getMinutes();
+    const currentMin = this.getWallClockMinutes(base, params.timezoneOffsetMin);
 
     const isAllowed =
       startMin <= endMin
@@ -107,18 +140,27 @@ export class CampaignsService {
         : currentMin >= startMin || currentMin <= endMin;
     if (isAllowed) return base;
 
-    const next = new Date(base);
     if (startMin <= endMin) {
       if (currentMin < startMin) {
-        next.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0);
-      } else {
-        next.setDate(next.getDate() + 1);
-        next.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0);
+        return this.withWallClockMinutes(
+          base,
+          startMin,
+          params.timezoneOffsetMin,
+        );
       }
-      return next;
+      return this.withWallClockMinutes(
+        base,
+        startMin,
+        params.timezoneOffsetMin,
+        1,
+      );
     }
 
-    next.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0);
+    const next = this.withWallClockMinutes(
+      base,
+      startMin,
+      params.timezoneOffsetMin,
+    );
     if (currentMin > endMin && currentMin < startMin) {
       return next;
     }
@@ -272,6 +314,7 @@ export class CampaignsService {
     scheduledAt?: Date;
     sendWindowStartMin?: number;
     sendWindowEndMin?: number;
+    timezoneOffsetMin?: number;
   }) {
     await this.ensureUser(data.userId);
     if (data.projectId) {
@@ -282,12 +325,16 @@ export class CampaignsService {
     }
 
     const now = new Date();
-    const baseRequested = data.scheduledAt ? data.scheduledAt : now;
-    const baseAllowed = this.computeNextAllowedStart({
-      base: baseRequested,
-      startMin: data.sendWindowStartMin,
-      endMin: data.sendWindowEndMin,
-    });
+    const hasExplicitSchedule = !!data.scheduledAt;
+    const baseRequested = data.scheduledAt ?? now;
+    const baseAllowed = hasExplicitSchedule
+      ? new Date(baseRequested)
+      : this.computeNextAllowedStart({
+          base: baseRequested,
+          startMin: data.sendWindowStartMin,
+          endMin: data.sendWindowEndMin,
+          timezoneOffsetMin: data.timezoneOffsetMin,
+        });
     const base = baseAllowed.getTime() < now.getTime() ? now : baseAllowed;
     const startDelayMs = Math.max(0, base.getTime() - now.getTime());
 
@@ -328,11 +375,14 @@ export class CampaignsService {
     for (let i = 0; i < contacts.length; i += 1) {
       const candidate =
         i === 0 ? base : new Date(cursor.getTime() + perMessageDelayMs);
-      const adjusted = this.computeNextAllowedStart({
-        base: candidate,
-        startMin: data.sendWindowStartMin,
-        endMin: data.sendWindowEndMin,
-      });
+      const adjusted = hasExplicitSchedule
+        ? candidate
+        : this.computeNextAllowedStart({
+            base: candidate,
+            startMin: data.sendWindowStartMin,
+            endMin: data.sendWindowEndMin,
+            timezoneOffsetMin: data.timezoneOffsetMin,
+          });
       cursor = adjusted;
       scheduleTimes.push(adjusted);
     }
