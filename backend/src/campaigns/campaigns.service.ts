@@ -7,6 +7,10 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { normalizeWhatsAppNumber } from '../whatsapp/phone.util';
 import { isMessageQueueEnabled } from '../queue/message-queue.state';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 type QueueJob = {
   name: string;
   data: {
@@ -219,7 +223,10 @@ export class CampaignsService {
     });
     await this.prisma.campaign.updateMany({
       where: { id: campaignId, status: { not: 'FAILED' } },
-      data: { status: sent > 0 ? 'COMPLETED' : failed > 0 ? 'FAILED' : 'COMPLETED' },
+      data: {
+        status:
+          sent > 0 ? 'COMPLETED' : failed > 0 ? 'FAILED' : 'FAILED',
+      },
     });
   }
 
@@ -274,10 +281,19 @@ export class CampaignsService {
       const run = async () => {
         const { instanceName: inst, number, text, messageId } = job.data;
         try {
-          await this.whatsappService.sendMessage(inst, number, text);
+          const result = await this.whatsappService.sendMessage(inst, number, text);
+          const providerMessageId =
+            isRecord(result) && typeof result.providerMessageId === 'string'
+              ? result.providerMessageId
+              : undefined;
           await this.prisma.message.update({
             where: { id: messageId },
-            data: { status: 'SENT', sentAt: new Date(), instanceName: inst },
+            data: {
+              status: 'SENT',
+              sentAt: new Date(),
+              instanceName: inst,
+              ...(providerMessageId ? { providerMessageId } : {}),
+            },
           });
         } catch (error) {
           this.logger.error(`Falha ao enviar mensagem ${messageId}: ${error}`);
@@ -299,6 +315,24 @@ export class CampaignsService {
 
   async processDueScheduledCampaigns() {
     const now = new Date();
+
+    if (isMessageQueueEnabled()) {
+      const campaigns = await this.prisma.campaign.findMany({
+        where: {
+          status: { in: ['SCHEDULED', 'PROCESSING'] },
+          scheduledAt: { lte: now },
+        },
+      });
+
+      for (const campaign of campaigns) {
+        await this.refreshCampaignStatus(
+          campaign.id,
+          campaign.instanceName ?? '',
+        );
+      }
+      return;
+    }
+
     const campaigns = await this.prisma.campaign.findMany({
       where: {
         status: 'SCHEDULED',
@@ -433,6 +467,13 @@ export class CampaignsService {
       },
     });
 
+    if (startDelayMs === 0 && contacts.length > 0) {
+      await this.whatsappService.validateWhatsAppNumbers(
+        data.instanceName,
+        contacts.map((contact) => this.normalizeContactPhone(contact.phone)),
+      );
+    }
+
     const perMessageDelayMs =
       typeof data.delay === 'number' ? data.delay : 5000;
     const scheduleTimes: Date[] = [];
@@ -494,6 +535,13 @@ export class CampaignsService {
       const queued = await this.tryEnqueueJobs(jobs);
       if (!queued) {
         await this.dispatchJobsDirectly(jobs, campaign.id, data.instanceName);
+      } else {
+        await this.prisma.campaign.update({
+          where: { id: campaign.id },
+          data: {
+            status: startDelayMs > 0 ? 'SCHEDULED' : 'PROCESSING',
+          },
+        });
       }
     }
 

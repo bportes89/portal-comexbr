@@ -54,6 +54,9 @@ export class CampaignsController {
       if (error instanceof Error && error.message.includes('Telefone inválido')) {
         throw new BadRequestException(error.message);
       }
+      if (error instanceof Error && error.message.includes('não possuem WhatsApp')) {
+        throw new BadRequestException(error.message);
+      }
       this.logger.error(error);
       return this.campaignsService.createCampaignInMemory(data);
     }

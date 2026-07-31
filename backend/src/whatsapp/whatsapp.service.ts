@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { isMessageQueueEnabled } from '../queue/message-queue.state';
 import { normalizeWhatsAppNumber } from './phone.util';
 import { WhatsAppNotConnectedError } from './whatsapp.errors';
+import { assertSendTextSuccess } from './whatsapp-send.util';
 
 interface SendMessageJobData {
   instanceName: string;
@@ -594,9 +595,50 @@ export class WhatsappService {
     }
   }
 
+  async validateWhatsAppNumbers(instanceName: string, numbers: string[]) {
+    const normalized = numbers.map((number) => normalizeWhatsAppNumber(number));
+
+    try {
+      const response = await lastValueFrom(
+        this.httpService.post<unknown>(
+          `${this.apiUrl}/chat/whatsappNumbers/${instanceName}`,
+          { numbers: normalized },
+          { headers: this.buildHeaders() },
+        ),
+      );
+
+      const payload = response.data;
+      if (!Array.isArray(payload)) return normalized;
+
+      const invalid = payload
+        .filter((entry) => isRecord(entry) && entry.exists === false)
+        .map((entry) =>
+          isRecord(entry) && typeof entry.number === 'string'
+            ? entry.number
+            : 'desconhecido',
+        );
+
+      if (invalid.length > 0) {
+        throw new Error(
+          `Número(s) não possuem WhatsApp: ${invalid.join(', ')}`,
+        );
+      }
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message.includes('não possuem WhatsApp')) {
+        throw error;
+      }
+      this.logger.warn(
+        `Validação de números ignorada: ${getErrorMessage(error)}`,
+      );
+    }
+
+    return normalized;
+  }
+
   async sendMessage(instanceName: string, number: string, text: string) {
     await this.ensureInstanceConnected(instanceName);
     const normalizedNumber = normalizeWhatsAppNumber(number);
+    await this.validateWhatsAppNumbers(instanceName, [normalizedNumber]);
 
     try {
       const response = await lastValueFrom(
@@ -614,7 +656,8 @@ export class WhatsappService {
           },
         ),
       );
-      return response.data;
+      const providerMessageId = assertSendTextSuccess(response.data);
+      return { ...(isRecord(response.data) ? response.data : {}), providerMessageId };
     } catch (error: unknown) {
       const details =
         error instanceof AxiosError

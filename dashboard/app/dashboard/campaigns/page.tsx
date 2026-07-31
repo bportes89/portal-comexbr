@@ -37,7 +37,7 @@ interface Campaign {
     read: number;
     failed: number;
   };
-  messages?: Array<{ status: string }>;
+  messages?: Array<{ status: string; providerMessageId?: string | null }>;
   scheduledFor?: string;
 }
 
@@ -61,6 +61,13 @@ type MessageTemplate = {
   createdAt: string;
 };
 
+function messageWasConfirmed(message: { status: string; providerMessageId?: string | null }) {
+  const status = String(message.status || '').toUpperCase();
+  if (status === 'DELIVERED' || status === 'READ') return true;
+  if (status === 'SENT') return Boolean(message.providerMessageId);
+  return false;
+}
+
 function normalizeCampaignStatus(
   campaign: Campaign,
 ): 'draft' | 'scheduled' | 'sending' | 'completed' | 'failed' | 'paused' {
@@ -69,11 +76,14 @@ function normalizeCampaignStatus(
     const statuses = messages.map((m) => String(m.status || '').toUpperCase());
     const pending = statuses.filter((s) => s === 'PENDING').length;
     if (pending === 0) {
-      const failed = statuses.filter((s) => s === 'FAILED').length;
-      if (failed === messages.length) return 'failed';
-      if (statuses.some((s) => ['SENT', 'DELIVERED', 'READ'].includes(s))) {
-        return 'completed';
-      }
+      const failed = messages.filter((m) => {
+        const status = String(m.status || '').toUpperCase();
+        return status === 'FAILED' || (status === 'SENT' && !m.providerMessageId);
+      }).length;
+      const confirmed = messages.filter((m) => messageWasConfirmed(m)).length;
+      if (confirmed > 0 && failed === 0) return 'completed';
+      if (failed > 0 && confirmed === 0) return 'failed';
+      if (failed > 0 && confirmed > 0) return 'completed';
     }
   }
 
@@ -128,10 +138,13 @@ function getCampaignStats(campaign: Campaign) {
 
   for (const msg of messages) {
     const status = String(msg.status || '').toUpperCase();
-    if (status === 'FAILED') failed += 1;
+    if (status === 'FAILED' || (status === 'SENT' && !msg.providerMessageId)) {
+      failed += 1;
+      continue;
+    }
     if (status === 'READ') read += 1;
     if (status === 'DELIVERED') delivered += 1;
-    if (status === 'SENT') sent += 1;
+    if (messageWasConfirmed(msg)) sent += 1;
   }
 
   sent += delivered + read;
@@ -485,6 +498,13 @@ export default function Campaigns() {
             {t('campaigns.new')}
           </button>
         </div>
+
+        {!hasConnectedSession && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            WhatsApp desconectado. As mensagens <strong>não serão entregues</strong> até reconectar em{' '}
+            <strong>Configurações</strong> e escanear o QR Code.
+          </div>
+        )}
 
         {/* Filters Bar */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col sm:flex-row gap-4 items-center justify-between">

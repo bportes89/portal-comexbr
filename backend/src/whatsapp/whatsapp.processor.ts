@@ -2,6 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { WhatsappService } from './whatsapp.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { extractProviderMessageId } from './whatsapp-send.util';
 
 interface SendMessageJobData {
   instanceName: string;
@@ -27,31 +28,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function extractProviderMessageId(payload: unknown): string | undefined {
-  if (!isRecord(payload)) return undefined;
-
-  const data = isRecord(payload.data) ? payload.data : payload;
-  if (!isRecord(data)) return undefined;
-
-  const key = isRecord(data.key) ? data.key : undefined;
-  const idFromKey = key && typeof key.id === 'string' ? key.id : undefined;
-  if (idFromKey) return idFromKey;
-
-  const messageId =
-    typeof data.messageId === 'string'
-      ? data.messageId
-      : typeof data.id === 'string'
-        ? data.id
-        : undefined;
-  if (messageId) return messageId;
-
-  const nestedKey =
-    isRecord(data.message) && isRecord(data.message.key)
-      ? data.message.key
-      : undefined;
-  const idFromNestedKey =
-    nestedKey && typeof nestedKey.id === 'string' ? nestedKey.id : undefined;
-  return idFromNestedKey;
+function resolveProviderMessageId(result: unknown) {
+  if (isRecord(result) && typeof result.providerMessageId === 'string') {
+    return result.providerMessageId;
+  }
+  return extractProviderMessageId(result);
 }
 
 function getCurrentMonthStart() {
@@ -93,9 +74,16 @@ async function updateCampaignAfterMessage(params: {
   const failed = await params.prisma.message.count({
     where: { campaignId, status: 'FAILED' },
   });
+  const sent = await params.prisma.message.count({
+    where: {
+      campaignId,
+      providerMessageId: { not: null },
+      status: { in: ['SENT', 'DELIVERED', 'READ'] },
+    },
+  });
   await params.prisma.campaign.updateMany({
     where: { id: campaignId, status: { not: 'FAILED' } },
-    data: { status: failed > 0 ? 'FAILED' : 'COMPLETED' },
+    data: { status: sent > 0 ? 'COMPLETED' : failed > 0 ? 'FAILED' : 'FAILED' },
   });
 }
 
@@ -161,7 +149,7 @@ export class WhatsappProcessor extends WorkerHost {
           );
 
           if (messageId) {
-            const providerMessageId = extractProviderMessageId(result);
+            const providerMessageId = resolveProviderMessageId(result);
             await this.prisma.message.update({
               where: { id: messageId },
               data: {
@@ -243,7 +231,7 @@ export class WhatsappProcessor extends WorkerHost {
           );
 
           if (messageId) {
-            const providerMessageId = extractProviderMessageId(result);
+            const providerMessageId = resolveProviderMessageId(result);
             await this.prisma.message.update({
               where: { id: messageId },
               data: {
