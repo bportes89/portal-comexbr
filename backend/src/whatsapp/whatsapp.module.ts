@@ -6,6 +6,12 @@ import { WhatsappController } from './whatsapp.controller';
 import { WhatsappProcessor } from './whatsapp.processor';
 import { AutomationsModule } from '../automations/automations.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { isMessageQueueEnabled } from '../queue/message-queue.state';
+
+const whatsappProviders = [
+  WhatsappService,
+  ...(isMessageQueueEnabled() ? [WhatsappProcessor] : []),
+];
 
 @Module({
   imports: [
@@ -17,7 +23,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     PrismaModule,
   ],
   controllers: [WhatsappController],
-  providers: [WhatsappService, WhatsappProcessor],
+  providers: whatsappProviders,
   exports: [WhatsappService, BullModule],
 })
 export class WhatsappModule {}

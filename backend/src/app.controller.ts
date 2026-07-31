@@ -4,6 +4,7 @@ import { Queue } from 'bullmq';
 import { ConfigService } from '@nestjs/config';
 import { AppService } from './app.service';
 import { PrismaService } from './prisma/prisma.service';
+import { isMessageQueueEnabled } from './queue/message-queue.state';
 
 @Controller()
 export class AppController {
@@ -40,11 +41,13 @@ export class AppController {
     }
 
     let queueOk = false;
-    try {
-      await withTimeout(this.whatsappQueue.getJobCounts(), 800);
-      queueOk = true;
-    } catch {
-      queueOk = false;
+    if (isMessageQueueEnabled()) {
+      try {
+        await withTimeout(this.whatsappQueue.getJobCounts(), 800);
+        queueOk = true;
+      } catch {
+        queueOk = false;
+      }
     }
 
     const apiUrl = this.configService.get<string>('EVOLUTION_API_URL') ?? '';

@@ -6,6 +6,7 @@ import { lastValueFrom } from 'rxjs';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
+import { isMessageQueueEnabled } from '../queue/message-queue.state';
 
 interface SendMessageJobData {
   instanceName: string;
@@ -913,19 +914,33 @@ export class WhatsappService {
     delay = 5000,
     messageId?: string,
   ) {
-    await this.whatsappQueue.add(
-      'sendMessage',
-      {
-        instanceName,
-        number,
-        text,
-        messageId,
-      },
-      {
-        delay,
-        removeOnComplete: true,
-      },
-    );
+    if (!isMessageQueueEnabled()) {
+      if (delay > 0) {
+        setTimeout(() => void this.sendMessage(instanceName, number, text), delay);
+        return;
+      }
+      await this.sendMessage(instanceName, number, text);
+      return;
+    }
+
+    try {
+      await this.whatsappQueue.add(
+        'sendMessage',
+        {
+          instanceName,
+          number,
+          text,
+          messageId,
+        },
+        {
+          delay,
+          removeOnComplete: true,
+        },
+      );
+    } catch (error) {
+      this.logger.warn(`Fila indisponível, enviando direto: ${error}`);
+      await this.sendMessage(instanceName, number, text);
+    }
   }
 
   async queueMedia(
@@ -935,18 +950,35 @@ export class WhatsappService {
     delay = 5000,
     messageId?: string,
   ) {
-    await this.whatsappQueue.add(
-      'sendMedia',
-      {
-        instanceName,
-        number,
-        payload,
-        messageId,
-      },
-      {
-        delay,
-        removeOnComplete: true,
-      },
-    );
+    if (!isMessageQueueEnabled()) {
+      if (delay > 0) {
+        setTimeout(
+          () => void this.sendMedia(instanceName, number, payload),
+          delay,
+        );
+        return;
+      }
+      await this.sendMedia(instanceName, number, payload);
+      return;
+    }
+
+    try {
+      await this.whatsappQueue.add(
+        'sendMedia',
+        {
+          instanceName,
+          number,
+          payload,
+          messageId,
+        },
+        {
+          delay,
+          removeOnComplete: true,
+        },
+      );
+    } catch (error) {
+      this.logger.warn(`Fila indisponível, enviando mídia direto: ${error}`);
+      await this.sendMedia(instanceName, number, payload);
+    }
   }
 }

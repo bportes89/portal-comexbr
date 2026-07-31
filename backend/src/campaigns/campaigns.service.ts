@@ -4,6 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { isMessageQueueEnabled } from '../queue/message-queue.state';
 
 type QueueJob = {
   name: string;
@@ -168,6 +169,7 @@ export class CampaignsService {
   }
 
   private async isQueueAvailable() {
+    if (!isMessageQueueEnabled()) return false;
     try {
       const client = await this.whatsappQueue.client;
       const pong = await client.ping();
