@@ -446,8 +446,6 @@ export default function Campaigns() {
     setIsModalOpen(true);
   };
 
-  const filters = ['all', 'sending', 'scheduled', 'completed', 'drafts'];
-
   return (
     <>
       <Header />
