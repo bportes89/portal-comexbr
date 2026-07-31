@@ -248,27 +248,36 @@ export class WhatsappService {
       async () =>
         (
           await lastValueFrom(
-            this.httpService.get<unknown>(`${this.apiUrl}/instance/connectionState`, {
-              headers: this.buildHeaders(),
-              params: { instanceName },
-            }),
+            this.httpService.get<unknown>(
+              `${this.apiUrl}/instance/connectionState`,
+              {
+                headers: this.buildHeaders(),
+                params: { instanceName },
+              },
+            ),
           )
         ).data,
       async () =>
         (
           await lastValueFrom(
-            this.httpService.get<unknown>(`${this.apiUrl}/instance/fetchInstances`, {
-              headers: this.buildHeaders(),
-              params: { instanceName },
-            }),
+            this.httpService.get<unknown>(
+              `${this.apiUrl}/instance/fetchInstances`,
+              {
+                headers: this.buildHeaders(),
+                params: { instanceName },
+              },
+            ),
           )
         ).data,
       async () =>
         (
           await lastValueFrom(
-            this.httpService.get<unknown>(`${this.apiUrl}/instance/fetchInstances`, {
-              headers: this.buildHeaders(),
-            }),
+            this.httpService.get<unknown>(
+              `${this.apiUrl}/instance/fetchInstances`,
+              {
+                headers: this.buildHeaders(),
+              },
+            ),
           )
         ).data,
     ];
@@ -285,7 +294,9 @@ export class WhatsappService {
       }
     }
 
-    throw lastError ?? new Error('Failed to fetch instance state from Evolution');
+    throw (
+      lastError ?? new Error('Failed to fetch instance state from Evolution')
+    );
   }
 
   private async updateSessionState(
@@ -304,7 +315,8 @@ export class WhatsappService {
 
   private async syncSessionWithEvolution(instanceName: string) {
     try {
-      const snapshot = await this.fetchEvolutionConnectionSnapshot(instanceName);
+      const snapshot =
+        await this.fetchEvolutionConnectionSnapshot(instanceName);
       const state = snapshot.state;
       const status = this.mapConnectionStateToSessionStatus(state);
 
@@ -438,66 +450,95 @@ export class WhatsappService {
     }
   }
 
+  private isInstanceAlreadyExistsError(error: unknown): boolean {
+    if (!(error instanceof AxiosError)) return false;
+
+    const status = error.response?.status;
+    if (status === 403) return true;
+
+    const data = error.response?.data;
+    if (!isRecord(data)) return false;
+
+    const response = isRecord(data['response']) ? data['response'] : undefined;
+    const message = response?.['message'];
+    if (!Array.isArray(message)) return false;
+
+    return message.some(
+      (item) =>
+        typeof item === 'string' &&
+        item.toLowerCase().includes('already in use'),
+    );
+  }
+
+  private async buildConnectResult(
+    instanceName: string,
+    data: unknown,
+  ): Promise<Record<string, unknown>> {
+    const qrCode = this.extractQrCode(data);
+    const phone = this.extractPhone(data);
+    const connected = this.isConnectedResponse(data);
+
+    await this.updateSessionState(instanceName, {
+      status: connected ? 'CONNECTED' : qrCode ? 'QRCODE' : 'DISCONNECTED',
+      qrcode: qrCode,
+      phone,
+    });
+
+    return {
+      ...(isRecord(data) ? data : {}),
+      ...(qrCode ? { base64: qrCode } : {}),
+      ...(connected ? { connected: true } : {}),
+      ...(phone ? { phone } : {}),
+    };
+  }
+
   async connectInstance(instanceName: string) {
     try {
-      const createResponse = await lastValueFrom(
-        this.httpService.post<unknown>(
-          `${this.apiUrl}/instance/create`,
-          {
-            instanceName,
-            token: this.apiKey,
-            qrcode: true,
-            integration: 'WHATSAPP-BAILEYS',
-          },
+      let createData: unknown = null;
+
+      try {
+        const createResponse = await lastValueFrom(
+          this.httpService.post<unknown>(
+            `${this.apiUrl}/instance/create`,
+            {
+              instanceName,
+              token: this.apiKey,
+              qrcode: true,
+              integration: 'WHATSAPP-BAILEYS',
+            },
+            {
+              headers: this.buildHeaders(),
+            },
+          ),
+        );
+        createData = createResponse.data;
+      } catch (error: unknown) {
+        if (!this.isInstanceAlreadyExistsError(error)) {
+          throw error;
+        }
+        this.logger.warn(
+          `Instance "${instanceName}" already exists; requesting connect.`,
+        );
+      }
+
+      if (createData) {
+        const createQrCode = this.extractQrCode(createData);
+        const createConnected = this.isConnectedResponse(createData);
+        if (createQrCode || createConnected) {
+          return await this.buildConnectResult(instanceName, createData);
+        }
+      }
+
+      const connectResponse = await lastValueFrom(
+        this.httpService.get<unknown>(
+          `${this.apiUrl}/instance/connect/${instanceName}`,
           {
             headers: this.buildHeaders(),
           },
         ),
       );
 
-      const createData = createResponse.data;
-      const createQrCode = this.extractQrCode(createData);
-      const createPhone = this.extractPhone(createData);
-      const createConnected = this.isConnectedResponse(createData);
-
-      if (createQrCode || createConnected) {
-        await this.updateSessionState(instanceName, {
-          status: createConnected ? 'CONNECTED' : 'QRCODE',
-          qrcode: createQrCode,
-          phone: createPhone,
-        });
-
-        return {
-          ...(isRecord(createData) ? createData : {}),
-          ...(createQrCode ? { base64: createQrCode } : {}),
-          ...(createConnected ? { connected: true } : {}),
-          ...(createPhone ? { phone: createPhone } : {}),
-        };
-      }
-
-      const connectResponse = await lastValueFrom(
-        this.httpService.get<unknown>(`${this.apiUrl}/instance/connect/${instanceName}`, {
-          headers: this.buildHeaders(),
-        }),
-      );
-
-      const connectData = connectResponse.data;
-      const connectQrCode = this.extractQrCode(connectData);
-      const connectPhone = this.extractPhone(connectData);
-      const connectConnected = this.isConnectedResponse(connectData);
-
-      await this.updateSessionState(instanceName, {
-        status: connectConnected ? 'CONNECTED' : connectQrCode ? 'QRCODE' : 'DISCONNECTED',
-        qrcode: connectQrCode,
-        phone: connectPhone,
-      });
-
-      return {
-        ...(isRecord(connectData) ? connectData : {}),
-        ...(connectQrCode ? { base64: connectQrCode } : {}),
-        ...(connectConnected ? { connected: true } : {}),
-        ...(connectPhone ? { phone: connectPhone } : {}),
-      };
+      return await this.buildConnectResult(instanceName, connectResponse.data);
     } catch (error: unknown) {
       const details =
         error instanceof AxiosError
