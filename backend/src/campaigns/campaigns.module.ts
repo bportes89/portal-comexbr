@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CampaignsService } from './campaigns.service';
 import { CampaignsController } from './campaigns.controller';
+import { CampaignsScheduler } from './campaigns.scheduler';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { BullModule } from '@nestjs/bullmq';
 
@@ -12,6 +13,6 @@ import { BullModule } from '@nestjs/bullmq';
     }),
   ],
   controllers: [CampaignsController],
-  providers: [CampaignsService],
+  providers: [CampaignsService, CampaignsScheduler],
 })
 export class CampaignsModule {}

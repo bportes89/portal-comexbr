@@ -560,25 +560,23 @@ export class WhatsappService {
           `${this.apiUrl}/message/sendText/${instanceName}`,
           {
             number,
-            options: {
-              delay: 1200,
-              presence: 'composing',
-              linkPreview: false,
-            },
-            textMessage: {
-              text,
-            },
+            text,
+            delay: 1200,
+            presence: 'composing',
+            linkPreview: false,
           },
           {
-            headers: {
-              apikey: this.apiKey,
-            },
+            headers: this.buildHeaders(),
           },
         ),
       );
       return response.data;
     } catch (error: unknown) {
-      this.logger.error(`Error sending message: ${getErrorMessage(error)}`);
+      const details =
+        error instanceof AxiosError
+          ? JSON.stringify(error.response?.data ?? {})
+          : getErrorMessage(error);
+      this.logger.error(`Error sending message: ${details}`);
       throw error;
     }
   }

@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { Header } from '../../../components/Header';
 import api from '../../../lib/api';
-import { cn } from '../../../lib/utils';
+import { cn, localDateTimeInputToIso, defaultDateTimeLocalValue } from '../../../lib/utils';
 import { useLanguage } from '../../../context/LanguageContext';
 import { useAuth } from '../../../context/AuthContext';
 
@@ -234,7 +234,7 @@ export default function Campaigns() {
         message: formData.message,
         delay: formData.delay,
         instanceName: formData.instanceName,
-        scheduledAt: formData.scheduledAt ? new Date(formData.scheduledAt).toISOString() : undefined,
+        scheduledAt: formData.scheduledAt ? localDateTimeInputToIso(formData.scheduledAt) : undefined,
         sendWindowStartMin,
         sendWindowEndMin,
         userId: user.id,
@@ -582,20 +582,21 @@ export default function Campaigns() {
 
                   <div className="flex items-center justify-between pt-4 border-t border-gray-50 text-xs text-gray-400">
                     <div className="flex flex-col gap-1">
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1" title="Data de criação">
                         <Calendar className="h-3 w-3" />
-                        {new Date(campaign.createdAt).toLocaleDateString(language === 'pt' ? 'pt-BR' : 'en-US')}
+                        <span>Criada: {new Date(campaign.createdAt).toLocaleDateString(language === 'pt' ? 'pt-BR' : 'en-US')}</span>
                       </div>
                       {(() => {
                         const raw = campaign.scheduledAt ?? campaign.scheduledFor;
                         if (!raw) return null;
                         const when = new Date(raw);
                         if (!Number.isFinite(when.getTime())) return null;
-                        if (when.getTime() <= Date.now()) return null;
                         return (
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 text-purple-600" title="Horário de envio agendado">
                             <Clock className="h-3 w-3" />
-                            {when.toLocaleString(language === 'pt' ? 'pt-BR' : 'en-US')}
+                            <span>
+                              Envio: {when.toLocaleString(language === 'pt' ? 'pt-BR' : 'en-US')}
+                            </span>
                           </div>
                         );
                       })()}
@@ -755,10 +756,12 @@ export default function Campaigns() {
                     </label>
                     <input
                       type="datetime-local"
+                      min={defaultDateTimeLocalValue(0).slice(0, 16)}
                       value={formData.scheduledAt}
                       onChange={(e) => setFormData({ ...formData, scheduledAt: e.target.value })}
                       className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all"
                     />
+                    <p className="mt-1 text-xs text-gray-400">Horário local do seu computador</p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">

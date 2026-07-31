@@ -1,16 +1,33 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
+
+type QueueJob = {
+  name: string;
+  data: {
+    instanceName: string;
+    number: string;
+    text: string;
+    messageId: string;
+  };
+  opts: {
+    delay: number;
+    removeOnComplete: boolean;
+  };
+};
 
 @Injectable()
 export class CampaignsService {
   private static demoCampaignsByUser = new Map<string, CampaignRecord[]>();
+  private readonly logger = new Logger(CampaignsService.name);
 
   constructor(
     private prisma: PrismaService,
     @InjectQueue('whatsapp-queue') private whatsappQueue: Queue,
+    private whatsappService: WhatsappService,
   ) {}
 
   private async ensureUser(userId: string) {
@@ -106,6 +123,142 @@ export class CampaignsService {
       return next;
     }
     return next;
+  }
+
+  private async isQueueAvailable() {
+    try {
+      const client = await this.whatsappQueue.client;
+      const pong = await client.ping();
+      return pong === 'PONG';
+    } catch {
+      return false;
+    }
+  }
+
+  private async tryEnqueueJobs(jobs: QueueJob[]) {
+    if (jobs.length === 0) return true;
+    if (!(await this.isQueueAvailable())) return false;
+    try {
+      await this.whatsappQueue.addBulk(jobs);
+      return true;
+    } catch (error) {
+      this.logger.warn(`Fila indisponível, enviando diretamente: ${error}`);
+      return false;
+    }
+  }
+
+  private async refreshCampaignStatus(campaignId: string, instanceName: string) {
+    await this.prisma.campaign.updateMany({
+      where: { id: campaignId, status: { in: ['SCHEDULED', 'PENDING'] } },
+      data: { status: 'PROCESSING', instanceName },
+    });
+
+    const pending = await this.prisma.message.count({
+      where: { campaignId, status: 'PENDING' },
+    });
+    if (pending > 0) return;
+
+    const failed = await this.prisma.message.count({
+      where: { campaignId, status: 'FAILED' },
+    });
+    await this.prisma.campaign.updateMany({
+      where: { id: campaignId, status: { not: 'FAILED' } },
+      data: { status: failed > 0 ? 'FAILED' : 'COMPLETED' },
+    });
+  }
+
+  private async dispatchJobsDirectly(
+    jobs: QueueJob[],
+    campaignId: string,
+    instanceName: string,
+  ) {
+    if (jobs.length === 0) return;
+
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: 'PROCESSING', instanceName },
+    });
+
+    for (const job of jobs) {
+      const run = async () => {
+        const { instanceName: inst, number, text, messageId } = job.data;
+        try {
+          await this.whatsappService.sendMessage(inst, number, text);
+          await this.prisma.message.update({
+            where: { id: messageId },
+            data: { status: 'SENT', sentAt: new Date(), instanceName: inst },
+          });
+        } catch (error) {
+          this.logger.error(`Falha ao enviar mensagem ${messageId}: ${error}`);
+          await this.prisma.message.update({
+            where: { id: messageId },
+            data: { status: 'FAILED', instanceName: inst },
+          });
+        }
+        await this.refreshCampaignStatus(campaignId, inst);
+      };
+
+      if (job.opts.delay > 0) {
+        setTimeout(() => void run(), job.opts.delay);
+      } else {
+        await run();
+      }
+    }
+  }
+
+  async processDueScheduledCampaigns() {
+    const now = new Date();
+    const campaigns = await this.prisma.campaign.findMany({
+      where: {
+        status: 'SCHEDULED',
+        scheduledAt: { lte: now },
+      },
+      include: {
+        messages: {
+          where: { status: 'PENDING' },
+          include: { contact: { select: { phone: true } } },
+        },
+      },
+    });
+
+    for (const campaign of campaigns) {
+      if (campaign.messages.length === 0) {
+        await this.refreshCampaignStatus(
+          campaign.id,
+          campaign.instanceName ?? '',
+        );
+        continue;
+      }
+
+      const perMessageDelayMs = 5000;
+      const jobs: QueueJob[] = campaign.messages.map((message, index) => ({
+        name: 'sendMessage',
+        data: {
+          instanceName: message.instanceName ?? campaign.instanceName ?? '',
+          number: message.contact.phone,
+          text: message.content,
+          messageId: message.id,
+        },
+        opts: {
+          delay: index * perMessageDelayMs,
+          removeOnComplete: true,
+        },
+      }));
+
+      const queued = await this.tryEnqueueJobs(jobs);
+      if (!queued) {
+        await this.dispatchJobsDirectly(
+          jobs,
+          campaign.id,
+          campaign.instanceName ?? '',
+        );
+      } else {
+        await this.prisma.campaign.update({
+          where: { id: campaign.id },
+          data: { status: 'PROCESSING' },
+        });
+      }
+    }
   }
 
   async createCampaign(data: {
@@ -223,13 +376,9 @@ export class CampaignsService {
     );
 
     if (jobs.length > 0) {
-      try {
-        await this.whatsappQueue.addBulk(jobs);
-      } catch {
-        await this.prisma.campaign.update({
-          where: { id: campaign.id },
-          data: { status: 'FAILED' },
-        });
+      const queued = await this.tryEnqueueJobs(jobs);
+      if (!queued) {
+        await this.dispatchJobsDirectly(jobs, campaign.id, data.instanceName);
       }
     }
 
